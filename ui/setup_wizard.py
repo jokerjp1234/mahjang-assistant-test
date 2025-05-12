@@ -468,6 +468,10 @@ class SetupWizard:
         right = max(x1, x2)
         bottom = max(y1, y2)
         
+        # 幅と高さを計算
+        width = right - left
+        height = bottom - top
+        
         # 範囲が小さすぎる場合は警告
         if width < 10 or height < 10:
             logger.warning(f"選択した範囲が小さすぎます: ({left}, {top}, {right}, {bottom})")
