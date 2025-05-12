@@ -8,6 +8,7 @@
 import os
 import sys
 import time
+import json
 import logging
 import argparse
 import traceback
@@ -24,6 +25,9 @@ from recognizer.tile_recognizer import MahjongSoulRecognizer
 from engine.mahjong_engine import MahjongSoulEngine
 from ui.assistant_ui import MahjongSoulUI
 from ui.setup_wizard import SetupWizard
+
+# 設定ファイルパス
+CONFIG_FILE = os.path.join(current_dir, "config.json")
 
 # ロガーの設定
 logging.basicConfig(
@@ -62,6 +66,61 @@ def quit_app():
     running = False
 
 
+def save_config(config):
+    """設定をファイルに保存する"""
+    try:
+        # screen_areasの内部リストをJSON互換に変換
+        json_config = {
+            'screen_areas': {}
+        }
+        
+        # 通常の値（タプル→リスト変換）
+        for key, value in config['screen_areas'].items():
+            if key != 'river_areas':
+                json_config['screen_areas'][key] = list(value)
+            else:
+                # リストの中のタプル変換
+                json_config['screen_areas'][key] = [list(item) for item in value]
+        
+        with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
+            json.dump(json_config, f, indent=4, ensure_ascii=False)
+        logger.info(f"設定を保存しました: {CONFIG_FILE}")
+        return True
+    except Exception as e:
+        logger.error(f"設定の保存に失敗しました: {e}")
+        return False
+
+
+def load_config():
+    """保存された設定を読み込む"""
+    if not os.path.exists(CONFIG_FILE):
+        logger.info("設定ファイルが見つかりません")
+        return {}
+    
+    try:
+        with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
+            json_config = json.load(f)
+        
+        # JSON形式からタプルに変換（リスト→タプル）
+        config = {
+            'screen_areas': {}
+        }
+        
+        # 通常の値（リスト→タプル変換）
+        for key, value in json_config['screen_areas'].items():
+            if key != 'river_areas':
+                config['screen_areas'][key] = tuple(value)
+            else:
+                # リストの中のリスト変換
+                config['screen_areas'][key] = [tuple(item) for item in value]
+        
+        logger.info(f"設定を読み込みました: {CONFIG_FILE}")
+        return config
+    except Exception as e:
+        logger.error(f"設定の読み込みに失敗しました: {e}")
+        return {}
+
+
 def main():
     """麻雀アシスタントのメイン処理"""
     global running, visible, ui
@@ -70,6 +129,7 @@ def main():
     parser = argparse.ArgumentParser(description='麻雀アシスタントツール')
     parser.add_argument('--debug', action='store_true', help='デバッグモードで実行')
     parser.add_argument('--no-setup', action='store_true', help='初期設定ウィザードをスキップ')
+    parser.add_argument('--reset-config', action='store_true', help='設定をリセットして初期設定を実行')
     args = parser.parse_args()
     
     # デバッグモード設定
@@ -78,12 +138,23 @@ def main():
         logger.debug("デバッグモードで起動")
     
     try:
+        # 設定の読み込み
+        config = load_config()
+        
         # 初期設定ウィザード（画面領域の設定など）
-        config = {}
-        if not args.no_setup:
+        if args.reset_config or not config or not args.no_setup:
             setup_wizard = SetupWizard()
+            if config and 'screen_areas' in config:
+                # 既存の設定があれば初期値として渡す
+                setup_wizard.screen_areas = config['screen_areas']
+            
             config = setup_wizard.run()
-            logger.info("初期設定完了")
+            
+            # 設定を保存
+            save_config(config)
+            logger.info("初期設定完了・保存")
+        else:
+            logger.info("保存された設定を使用します")
         
         # コンポーネント初期化
         recognizer = MahjongSoulRecognizer(config.get('screen_areas', {}))
