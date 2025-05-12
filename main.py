@@ -121,6 +121,24 @@ def load_config():
         return {}
 
 
+def check_model_exists():
+    """
+    牌認識モデルが存在するかチェック
+    
+    Returns
+    -------
+    bool
+        モデルが存在すればTrue、なければFalse
+    """
+    model_path = os.path.join(current_dir, "models/tile_recognition_model")
+    exists = os.path.exists(model_path)
+    if exists:
+        logger.info("牌認識モデルが見つかりました")
+    else:
+        logger.warning("牌認識モデルが見つかりません。デモモードで動作します")
+    return exists
+
+
 def main():
     """麻雀アシスタントのメイン処理"""
     global running, visible, ui
@@ -130,6 +148,7 @@ def main():
     parser.add_argument('--debug', action='store_true', help='デバッグモードで実行')
     parser.add_argument('--no-setup', action='store_true', help='初期設定ウィザードをスキップ')
     parser.add_argument('--reset-config', action='store_true', help='設定をリセットして初期設定を実行')
+    parser.add_argument('--force-demo', action='store_true', help='デモモードを強制的に有効化')
     args = parser.parse_args()
     
     # デバッグモード設定
@@ -156,10 +175,13 @@ def main():
         else:
             logger.info("保存された設定を使用します")
         
+        # モデルの存在確認
+        model_exists = check_model_exists() and not args.force_demo
+        
         # コンポーネント初期化
         recognizer = MahjongSoulRecognizer(config.get('screen_areas', {}))
         engine = MahjongSoulEngine()
-        ui = MahjongSoulUI()
+        ui = MahjongSoulUI(is_demo_mode=not model_exists)
         logger.info("コンポーネント初期化完了")
         
         # ホットキー設定
