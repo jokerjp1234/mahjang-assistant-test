@@ -2,13 +2,15 @@
 # -*- coding: utf-8 -*-
 
 """
-麻雀アシスタント初期設定ウィザード
+麻雀アシスタント初期設定ウィザード - 改良版
+雀魂画面上で直接範囲を指定できるオーバーレイ型設定画面
 """
 
 import os
 import logging
 import pygame
 import numpy as np
+import keyboard
 from PIL import ImageGrab
 from pygame.locals import *
 
@@ -17,36 +19,32 @@ logger = logging.getLogger("MahjongAssistant.UI.Setup")
 
 class SetupWizard:
     """
-    初期設定ウィザードクラス
+    初期設定ウィザードクラス（オーバーレイ型）
     """
     
-    def __init__(self, width=800, height=600):
-        """
-        初期化
-        
-        Parameters
-        ----------
-        width : int, optional
-            ウィンドウの幅
-        height : int, optional
-            ウィンドウの高さ
-        """
+    def __init__(self):
+        """初期化"""
         # Pygameの初期化
         pygame.init()
         
-        # ウィンドウサイズ
-        self.width = width
-        self.height = height
+        # 画面サイズ（スクリーン全体）
+        screen_info = pygame.display.Info()
+        self.width = screen_info.current_w
+        self.height = screen_info.current_h
         
-        # 画面の初期化
-        self.screen = pygame.display.set_mode((self.width, self.height))
-        pygame.display.set_caption("麻雀アシスタント - 初期設定")
+        # 画面の初期化（透明オーバーレイ）
+        self.screen = pygame.display.set_mode(
+            (self.width, self.height),
+            pygame.NOFRAME | pygame.SRCALPHA
+        )
+        pygame.display.set_caption("麻雀アシスタント - 設定ウィザード")
         
         # 色設定
-        self.bg_color = (41, 40, 45)  # 背景色
-        self.text_color = (255, 247, 227)  # テキスト色
+        self.bg_color = (0, 0, 0, 0)  # 完全透明
+        self.overlay_color = (0, 0, 0, 80)  # 半透明オーバーレイ
+        self.text_color = (255, 255, 255)  # テキスト色
         self.highlight_color = (234, 183, 96)  # ハイライト色
-        self.selection_color = (100, 120, 200, 128)  # 選択範囲色
+        self.selection_color = (100, 200, 255, 160)  # 選択範囲色
         
         # フォント設定
         self.title_font = pygame.font.SysFont("notosanscjkjp", 28, bold=True)
@@ -85,10 +83,41 @@ class SetupWizard:
         self.selection_start = None
         self.selection_end = None
         
-        # スクリーンショット
-        self.screenshot = None
+        # マウスカーソル位置
+        self.mouse_pos = (0, 0)
+        
+        # 選択完了したかどうか
+        self.selection_completed = False
+        
+        # 説明パネルの位置
+        self.panel_x = 20
+        self.panel_y = 20
+        self.panel_width = 300
+        self.panel_height = 150
+        
+        # 制御キー情報
+        self.control_keys = [
+            {"key": "Enter", "desc": "次の項目へ"},
+            {"key": "Esc", "desc": "キャンセル"},
+            {"key": "B", "desc": "前の項目へ"},
+            {"key": "C", "desc": "設定を完了"}
+        ]
+        
+        # キーボードフックの設定
+        self._setup_keyboard_hooks()
         
         logger.info("SetupWizard初期化完了")
+    
+    def _setup_keyboard_hooks(self):
+        """キーボードのグローバルフックを設定"""
+        # Enterキーで次の項目へ
+        keyboard.add_hotkey('enter', self._next_item)
+        
+        # Bキーで前の項目へ
+        keyboard.add_hotkey('b', self._prev_item)
+        
+        # Cキーで設定完了
+        keyboard.add_hotkey('c', self._complete_setup)
     
     def run(self):
         """
@@ -102,7 +131,7 @@ class SetupWizard:
         # メインループ
         running = True
         
-        while running and self.current_item < len(self.items):
+        while running:
             # 画面更新
             self._update_screen()
             
@@ -114,19 +143,10 @@ class SetupWizard:
                 elif event.type == pygame.KEYDOWN:
                     if event.key == pygame.K_ESCAPE:
                         running = False
-                    
-                    # Enterキーで次の項目へ
-                    elif event.key == pygame.K_RETURN:
-                        self._next_item()
-                    
-                    # Sキーでスクリーンショット更新
-                    elif event.key == pygame.K_s:
-                        self._take_screenshot()
-                        logger.info("スクリーンショット更新")
-                    
-                    # Bキーで前の項目へ戻る
-                    elif event.key == pygame.K_b:
-                        self._prev_item()
+                
+                # マウスの位置を常に取得
+                elif event.type == pygame.MOUSEMOTION:
+                    self.mouse_pos = event.pos
                 
                 # マウスイベント
                 elif event.type == pygame.MOUSEBUTTONDOWN:
@@ -135,6 +155,7 @@ class SetupWizard:
                         self.selecting = True
                         self.selection_start = event.pos
                         self.selection_end = event.pos
+                        self.selection_completed = False
                 
                 elif event.type == pygame.MOUSEMOTION:
                     if self.selecting:
@@ -147,9 +168,17 @@ class SetupWizard:
                         self.selection_end = event.pos
                         self._set_current_area()
                         self.selecting = False
+                        self.selection_completed = True
+            
+            # 設定が完了したら終了
+            if self.current_item >= len(self.items):
+                running = False
             
             # フレームレート制御
             pygame.time.delay(30)
+        
+        # キーボードフックの解除
+        keyboard.unhook_all()
         
         # 終了処理
         pygame.quit()
@@ -161,100 +190,88 @@ class SetupWizard:
     
     def _update_screen(self):
         """画面を更新"""
-        # 背景
+        # 透明な背景
         self.screen.fill(self.bg_color)
-        
-        # スクリーンショットがあれば表示
-        if self.screenshot is not None:
-            # 縮小表示
-            screenshot_height = int(self.screenshot.get_height() * 
-                                   (self.width / self.screenshot.get_width()))
-            screenshot_scaled = pygame.transform.scale(
-                self.screenshot, (self.width, screenshot_height))
-            
-            self.screen.blit(screenshot_scaled, (0, 0))
-        
-        # 現在の設定項目
-        self._draw_title(f"項目 {self.current_item+1}/{len(self.items)}: "
-                        f"{self.items[self.current_item]}")
-        
-        # ガイドメッセージ
-        self._draw_message("左クリックでドラッグして領域を選択してください。")
-        self._draw_submessage("S: スクリーンショット更新 / Enter: 次へ / B: 戻る / ESC: キャンセル")
         
         # 選択中の領域を表示
         if self.selecting and self.selection_start is not None and self.selection_end is not None:
-            x1, y1 = self.selection_start
-            x2, y2 = self.selection_end
-            
-            # 座標を並べ替え（左上 -> 右下）
-            left = min(x1, x2)
-            top = min(y1, y2)
-            width = abs(x2 - x1)
-            height = abs(y2 - y1)
-            
-            # 選択範囲を描画
-            selection_surface = pygame.Surface((width, height), pygame.SRCALPHA)
-            selection_surface.fill(self.selection_color)
-            self.screen.blit(selection_surface, (left, top))
-            
-            # 枠線
-            pygame.draw.rect(self.screen, self.highlight_color, 
-                            (left, top, width, height), 2)
-            
-            # 座標表示
-            pos_text = self.small_font.render(
-                f"({left}, {top}, {left+width}, {top+height})", 
-                True, self.highlight_color)
-            self.screen.blit(pos_text, (left, top + height + 5))
+            self._draw_selection()
+        
+        # 選択完了した領域も表示
+        if self.selection_completed:
+            self._draw_completed_selection()
         
         # 設定済み領域を表示
         self._draw_configured_areas()
         
+        # 情報パネル
+        self._draw_info_panel()
+        
+        # マウス位置を表示
+        self._draw_mouse_position()
+        
         # 画面更新
         pygame.display.update()
     
-    def _draw_title(self, text):
-        """
-        タイトルを描画
+    def _draw_selection(self):
+        """選択中の領域を描画"""
+        x1, y1 = self.selection_start
+        x2, y2 = self.selection_end
         
-        Parameters
-        ----------
-        text : str
-            タイトルテキスト
-        """
-        # 背景
-        title_bg = pygame.Surface((self.width, 50))
-        title_bg.fill((60, 59, 64))
-        self.screen.blit(title_bg, (0, self.height - 100))
+        # 座標を並べ替え（左上 -> 右下）
+        left = min(x1, x2)
+        top = min(y1, y2)
+        width = abs(x2 - x1)
+        height = abs(y2 - y1)
         
-        # テキスト
-        title = self.title_font.render(text, True, self.highlight_color)
-        self.screen.blit(title, (self.width//2 - title.get_width()//2, self.height - 95))
+        # 選択範囲を描画
+        selection_surface = pygame.Surface((width, height), pygame.SRCALPHA)
+        selection_surface.fill(self.selection_color)
+        self.screen.blit(selection_surface, (left, top))
+        
+        # 枠線
+        pygame.draw.rect(self.screen, self.highlight_color, 
+                        (left, top, width, height), 2)
+        
+        # 座標表示
+        pos_text = self.small_font.render(
+            f"({left}, {top}, {left+width}, {top+height})", 
+            True, self.highlight_color)
+        self.screen.blit(pos_text, (left, top + height + 5))
     
-    def _draw_message(self, text):
-        """
-        メッセージを描画
+    def _draw_completed_selection(self):
+        """選択完了した領域を描画"""
+        if self.current_item == 0:
+            # 手牌エリア
+            area = self.screen_areas['hand_area']
+        elif self.current_item == 1:
+            # ドラ表示エリア
+            area = self.screen_areas['dora_area']
+        elif 2 <= self.current_item <= 5:
+            # 河エリア
+            river_idx = self.current_item - 2
+            if 'river_areas' in self.screen_areas and len(self.screen_areas['river_areas']) > river_idx:
+                area = self.screen_areas['river_areas'][river_idx]
+            else:
+                return
+        elif self.current_item == 6:
+            # ターン表示エリア
+            area = self.screen_areas['turn_indicator_area']
+        else:
+            return
         
-        Parameters
-        ----------
-        text : str
-            メッセージテキスト
-        """
-        message = self.normal_font.render(text, True, self.text_color)
-        self.screen.blit(message, (self.width//2 - message.get_width()//2, self.height - 50))
-    
-    def _draw_submessage(self, text):
-        """
-        サブメッセージを描画
+        left, top, right, bottom = area
+        width = right - left
+        height = bottom - top
         
-        Parameters
-        ----------
-        text : str
-            サブメッセージテキスト
-        """
-        message = self.small_font.render(text, True, self.text_color)
-        self.screen.blit(message, (self.width//2 - message.get_width()//2, self.height - 25))
+        # 選択範囲を描画（淡いハイライト）
+        selection_surface = pygame.Surface((width, height), pygame.SRCALPHA)
+        selection_surface.fill((100, 255, 100, 100))  # 緑色
+        self.screen.blit(selection_surface, (left, top))
+        
+        # 枠線
+        pygame.draw.rect(self.screen, (0, 255, 0), 
+                        (left, top, width, height), 2)
     
     def _draw_configured_areas(self):
         """設定済みの領域を表示"""
@@ -262,35 +279,27 @@ class SetupWizard:
         areas = []
         
         # 手牌エリア
-        if 'hand_area' in self.screen_areas:
+        if 'hand_area' in self.screen_areas and self.current_item != 0:
             areas.append(('手牌', self.screen_areas['hand_area']))
         
         # ドラ表示エリア
-        if 'dora_area' in self.screen_areas:
+        if 'dora_area' in self.screen_areas and self.current_item != 1:
             areas.append(('ドラ', self.screen_areas['dora_area']))
         
         # 河エリア
         if 'river_areas' in self.screen_areas:
             river_names = ['自分', '右家', '対面', '左家']
             for i, area in enumerate(self.screen_areas['river_areas']):
-                if i < len(river_names):
+                if i < len(river_names) and self.current_item != i + 2:
                     areas.append((f'河({river_names[i]})', area))
         
         # ターン表示エリア
-        if 'turn_indicator_area' in self.screen_areas:
+        if 'turn_indicator_area' in self.screen_areas and self.current_item != 6:
             areas.append(('ターン', self.screen_areas['turn_indicator_area']))
         
         # 設定済み領域を表示
         for name, area in areas:
             x1, y1, x2, y2 = area
-            
-            # 縮小表示の場合は座標を調整
-            if self.screenshot is not None:
-                scale_factor = self.width / self.screenshot.get_width()
-                x1 = int(x1 * scale_factor)
-                y1 = int(y1 * scale_factor)
-                x2 = int(x2 * scale_factor)
-                y2 = int(y2 * scale_factor)
             
             # 半透明の領域
             width = x2 - x1
@@ -308,22 +317,48 @@ class SetupWizard:
             name_text = self.small_font.render(name, True, (200, 200, 200))
             self.screen.blit(name_text, (x1 + 5, y1 + 5))
     
-    def _take_screenshot(self):
-        """スクリーンショットを撮影"""
-        try:
-            # 画面全体をキャプチャ
-            img = ImageGrab.grab()
-            
-            # PIL画像からPygame画像に変換
-            mode = img.mode
-            size = img.size
-            data = img.tobytes()
-            
-            self.screenshot = pygame.image.fromstring(data, size, mode)
-            logger.info(f"スクリーンショット撮影成功: {size}")
-            
-        except Exception as e:
-            logger.error(f"スクリーンショット撮影中にエラー: {e}")
+    def _draw_info_panel(self):
+        """情報パネルを描画"""
+        # パネル背景
+        panel = pygame.Surface((self.panel_width, self.panel_height), pygame.SRCALPHA)
+        panel.fill((0, 0, 0, 180))
+        
+        # 枠線
+        pygame.draw.rect(panel, self.highlight_color, 
+                        (0, 0, self.panel_width, self.panel_height), 2)
+        
+        # タイトル
+        title = self.title_font.render(
+            f"設定中: {self.items[self.current_item]}", True, self.highlight_color)
+        panel.blit(title, (10, 10))
+        
+        # 説明
+        desc = self.normal_font.render(
+            "範囲を選択してください", True, self.text_color)
+        panel.blit(desc, (10, 45))
+        
+        # キー説明
+        y_offset = 75
+        for key_info in self.control_keys:
+            key_text = self.small_font.render(
+                f"{key_info['key']}: {key_info['desc']}", True, self.text_color)
+            panel.blit(key_text, (10, y_offset))
+            y_offset += 20
+        
+        # パネルを画面に描画
+        self.screen.blit(panel, (self.panel_x, self.panel_y))
+    
+    def _draw_mouse_position(self):
+        """マウス位置を表示"""
+        x, y = self.mouse_pos
+        pos_text = self.small_font.render(f"X: {x}, Y: {y}", True, (255, 255, 255))
+        
+        # 背景付きで表示（読みやすくするため）
+        text_bg = pygame.Surface((100, 20), pygame.SRCALPHA)
+        text_bg.fill((0, 0, 0, 150))
+        
+        self.screen.blit(text_bg, (x + 15, y + 15))
+        self.screen.blit(pos_text, (x + 20, y + 17))
     
     def _set_current_area(self):
         """現在の選択範囲を設定に反映"""
@@ -339,14 +374,6 @@ class SetupWizard:
         top = min(y1, y2)
         right = max(x1, x2)
         bottom = max(y1, y2)
-        
-        # スクリーンショットのスケールを考慮して実座標に変換
-        if self.screenshot is not None:
-            scale_factor = self.screenshot.get_width() / self.width
-            left = int(left * scale_factor)
-            top = int(top * scale_factor)
-            right = int(right * scale_factor)
-            bottom = int(bottom * scale_factor)
         
         # 項目に応じて設定
         if self.current_item == 0:
@@ -375,13 +402,49 @@ class SetupWizard:
     
     def _next_item(self):
         """次の設定項目へ"""
+        # 現在の項目が設定済みかチェック
+        if not self.selection_completed:
+            logger.warning(f"項目 {self.items[self.current_item]} は未設定です")
+            return
+        
         self.current_item = min(self.current_item + 1, len(self.items))
+        self.selection_completed = False
         
         # 最後まで設定したら終了
         if self.current_item >= len(self.items):
             logger.info("全項目の設定完了")
+        else:
+            logger.info(f"次の項目: {self.items[self.current_item]}")
     
     def _prev_item(self):
         """前の設定項目へ"""
         self.current_item = max(self.current_item - 1, 0)
+        
+        # 前の項目の選択状態を復元
+        self.selection_completed = True
+        
         logger.info(f"前の項目に戻る: {self.items[self.current_item]}")
+    
+    def _complete_setup(self):
+        """設定を完了する"""
+        # すべての項目が設定されているか確認
+        all_set = True
+        
+        if 'hand_area' not in self.screen_areas:
+            all_set = False
+        
+        if 'dora_area' not in self.screen_areas:
+            all_set = False
+        
+        if 'river_areas' not in self.screen_areas or len(self.screen_areas['river_areas']) < 4:
+            all_set = False
+        
+        if 'turn_indicator_area' not in self.screen_areas:
+            all_set = False
+        
+        if all_set:
+            # 設定完了
+            self.current_item = len(self.items)
+            logger.info("設定が完了しました")
+        else:
+            logger.warning("すべての項目が設定されていません")
