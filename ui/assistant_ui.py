@@ -17,7 +17,7 @@ logger = logging.getLogger("MahjongAssistant.UI")
 class MahjongSoulUI:
     """雀魂向けアシスタントUIクラス"""
     
-    def __init__(self, width=350, height=600):
+    def __init__(self, width=350, height=600, is_demo_mode=False):
         """
         初期化
         
@@ -27,6 +27,8 @@ class MahjongSoulUI:
             ウィンドウの幅
         height : int, optional
             ウィンドウの高さ
+        is_demo_mode : bool, optional
+            デモモードかどうか
         """
         # Pygameの初期化
         pygame.init()
@@ -34,6 +36,9 @@ class MahjongSoulUI:
         # ウィンドウサイズ
         self.width = width
         self.height = height
+        
+        # デモモードフラグ
+        self.is_demo_mode = is_demo_mode
         
         # 画面の初期化
         self.screen = pygame.display.set_mode(
@@ -47,6 +52,7 @@ class MahjongSoulUI:
         self.text_color = (255, 247, 227)  # 雀魂のテキスト色
         self.highlight_color = (234, 183, 96)  # 雀魂の金色（ハイライト用）
         self.danger_color = (217, 79, 70)  # 赤色（危険牌用）
+        self.demo_color = (255, 165, 0)  # オレンジ色（デモモード表示用）
         
         # フォント設定
         self.title_font = pygame.font.SysFont("notosanscjkjp", 28, bold=True)
@@ -65,6 +71,9 @@ class MahjongSoulUI:
         # ボタン画像生成
         self.button_img = self._create_button()
         
+        # 現在表示されているゲーム状態
+        self.current_display_state = {}
+        
         logger.info("MahjongSoulUI初期化完了")
     
     def update(self, display_state):
@@ -76,6 +85,9 @@ class MahjongSoulUI:
         display_state : dict
             表示データ（シャンテン数、最適捨て牌など）
         """
+        # 現在の状態を保存
+        self.current_display_state = display_state
+        
         # 背景描画
         self.screen.blit(self.bg_img, (0, 0))
         
@@ -83,6 +95,11 @@ class MahjongSoulUI:
         self._draw_panel(10, 10, self.width - 20, 50)
         title = self.title_font.render("雀魂アシスタント", True, self.highlight_color)
         self.screen.blit(title, (self.width//2 - title.get_width()//2, 20))
+        
+        # デモモード表示
+        if self.is_demo_mode:
+            demo_text = self.small_font.render("デモモード - 認識モデルなし", True, self.demo_color)
+            self.screen.blit(demo_text, (self.width//2 - demo_text.get_width()//2, 45))
         
         # シャンテン数表示
         self._draw_panel(10, 70, self.width - 20, 50)
@@ -155,8 +172,15 @@ class MahjongSoulUI:
                 
                 y_pos += 60
         
-        # 設定ボタン
-        self._draw_button(self.width - 100, self.height - 50, 80, 40, "設定")
+        # デバッグ情報（画像認識されているかどうか）
+        self._draw_panel(10, self.height - 60, self.width - 20, 50)
+        if self.is_demo_mode:
+            debug_text = self.small_font.render(
+                "状態: モデルがロードされていません。認識されません。", True, self.demo_color)
+        else:
+            debug_text = self.small_font.render(
+                "状態: 画像認識中", True, self.highlight_color)
+        self.screen.blit(debug_text, (20, self.height - 45))
         
         # 画面更新
         pygame.display.update()
