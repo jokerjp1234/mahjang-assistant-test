@@ -61,6 +61,9 @@ class SetupWizard:
             "ターン表示エリア"
         ]
         
+        # 項目数を保存
+        self.items_count = len(self.items)
+        
         # 領域設定（初期値）
         self.screen_areas = {
             'hand_area': (210, 650, 1070, 720),   # 手牌エリア
@@ -76,6 +79,9 @@ class SetupWizard:
         
         # 現在設定中の項目インデックス
         self.current_item = 0
+        
+        # 設定完了フラグ
+        self.setup_completed = False
         
         # 選択中の領域
         self.selecting = False
@@ -234,7 +240,7 @@ class SetupWizard:
                         self.selection_completed = True
             
             # 設定が完了したら終了
-            if self.current_item >= len(self.items):
+            if self.setup_completed:
                 running = False
             
             # フレームレート制御
@@ -401,14 +407,22 @@ class SetupWizard:
         pygame.draw.rect(panel, self.highlight_color, 
                         (0, 0, self.panel_width, self.panel_height), 1)
         
-        # タイトル
-        title = self.title_font.render(
-            f"設定中: {self.items[self.current_item]}", True, self.highlight_color)
+        # タイトル - インデックスが範囲内かチェック
+        if self.current_item < len(self.items):
+            title_text = f"設定中: {self.items[self.current_item]}"
+        else:
+            title_text = "設定完了"
+        
+        title = self.title_font.render(title_text, True, self.highlight_color)
         panel.blit(title, (10, 10))
         
         # 説明
-        desc = self.normal_font.render(
-            "範囲を選択してください", True, self.text_color)
+        if self.current_item < len(self.items):
+            desc = self.normal_font.render(
+                "範囲を選択してください", True, self.text_color)
+        else:
+            desc = self.normal_font.render(
+                "すべての設定が完了しました", True, self.text_color)
         panel.blit(desc, (10, 45))
         
         # キー説明
@@ -454,6 +468,13 @@ class SetupWizard:
         right = max(x1, x2)
         bottom = max(y1, y2)
         
+        # 範囲が小さすぎる場合は警告
+        if width < 10 or height < 10:
+            logger.warning(f"選択した範囲が小さすぎます: ({left}, {top}, {right}, {bottom})")
+            # 選択を無効化
+            self.selection_completed = False
+            return
+        
         # 項目に応じて設定
         if self.current_item == 0:
             # 手牌エリア
@@ -486,12 +507,13 @@ class SetupWizard:
             logger.warning(f"項目 {self.items[self.current_item]} は未設定です")
             return
         
-        self.current_item = min(self.current_item + 1, len(self.items))
+        self.current_item += 1
         self.selection_completed = False
         
-        # 最後まで設定したら終了
-        if self.current_item >= len(self.items):
+        # 最後まで設定したら設定完了フラグを立てる
+        if self.current_item >= self.items_count:
             logger.info("全項目の設定完了")
+            self.setup_completed = True
         else:
             logger.info(f"次の項目: {self.items[self.current_item]}")
     
@@ -522,8 +544,8 @@ class SetupWizard:
             all_set = False
         
         if all_set:
-            # 設定完了
-            self.current_item = len(self.items)
+            # 設定完了フラグを立てる
             logger.info("設定が完了しました")
+            self.setup_completed = True
         else:
             logger.warning("すべての項目が設定されていません")
