@@ -3,7 +3,7 @@
 
 """
 麻雀アシスタント初期設定ウィザード - 改良版
-雀魂画面上で直接範囲を指定できるオーバーレイ型設定画面
+雀魂画面上で直接範囲を指定できる完全透明オーバーレイ型設定画面
 """
 
 import os
@@ -19,7 +19,7 @@ logger = logging.getLogger("MahjongAssistant.UI.Setup")
 
 class SetupWizard:
     """
-    初期設定ウィザードクラス（オーバーレイ型）
+    初期設定ウィザードクラス（完全透明オーバーレイ型）
     """
     
     def __init__(self):
@@ -32,7 +32,7 @@ class SetupWizard:
         self.width = screen_info.current_w
         self.height = screen_info.current_h
         
-        # 画面の初期化（透明オーバーレイ）
+        # 画面の初期化（完全透明オーバーレイ）
         self.screen = pygame.display.set_mode(
             (self.width, self.height),
             pygame.NOFRAME | pygame.SRCALPHA
@@ -41,10 +41,11 @@ class SetupWizard:
         
         # 色設定
         self.bg_color = (0, 0, 0, 0)  # 完全透明
-        self.overlay_color = (0, 0, 0, 80)  # 半透明オーバーレイ
         self.text_color = (255, 255, 255)  # テキスト色
         self.highlight_color = (234, 183, 96)  # ハイライト色
-        self.selection_color = (100, 200, 255, 160)  # 選択範囲色
+        self.selection_color = (100, 200, 255, 60)  # 選択範囲色（より透明）
+        self.completed_selection_color = (100, 255, 100, 40)  # 完了選択色（より透明）
+        self.configured_area_color = (100, 100, 100, 30)  # 設定済み領域（より透明）
         
         # フォント設定
         self.title_font = pygame.font.SysFont("notosanscjkjp", 28, bold=True)
@@ -89,18 +90,24 @@ class SetupWizard:
         # 選択完了したかどうか
         self.selection_completed = False
         
-        # 説明パネルの位置
+        # 説明パネルの位置とトグル
         self.panel_x = 20
         self.panel_y = 20
         self.panel_width = 300
         self.panel_height = 150
+        self.show_panel = True  # パネル表示トグル
+        
+        # マウス位置表示トグル
+        self.show_mouse_pos = True
         
         # 制御キー情報
         self.control_keys = [
             {"key": "Enter", "desc": "次の項目へ"},
             {"key": "Esc", "desc": "キャンセル"},
             {"key": "B", "desc": "前の項目へ"},
-            {"key": "C", "desc": "設定を完了"}
+            {"key": "C", "desc": "設定を完了"},
+            {"key": "H", "desc": "ヘルプパネル表示/非表示"},
+            {"key": "M", "desc": "マウス座標表示/非表示"}
         ]
         
         # キーボードフックの設定
@@ -118,6 +125,22 @@ class SetupWizard:
         
         # Cキーで設定完了
         keyboard.add_hotkey('c', self._complete_setup)
+        
+        # Hキーでヘルプパネル表示/非表示
+        keyboard.add_hotkey('h', self._toggle_panel)
+        
+        # Mキーでマウス位置表示/非表示
+        keyboard.add_hotkey('m', self._toggle_mouse_pos)
+    
+    def _toggle_panel(self):
+        """ヘルプパネル表示/非表示を切り替え"""
+        self.show_panel = not self.show_panel
+        logger.info(f"ヘルプパネル表示: {self.show_panel}")
+    
+    def _toggle_mouse_pos(self):
+        """マウス位置表示/非表示を切り替え"""
+        self.show_mouse_pos = not self.show_mouse_pos
+        logger.info(f"マウス位置表示: {self.show_mouse_pos}")
     
     def run(self):
         """
@@ -193,22 +216,24 @@ class SetupWizard:
         # 透明な背景
         self.screen.fill(self.bg_color)
         
-        # 選択中の領域を表示
-        if self.selecting and self.selection_start is not None and self.selection_end is not None:
-            self._draw_selection()
+        # 設定済み領域を表示（最も透明度を低く）
+        self._draw_configured_areas()
         
-        # 選択完了した領域も表示
+        # 選択完了した領域を表示
         if self.selection_completed:
             self._draw_completed_selection()
         
-        # 設定済み領域を表示
-        self._draw_configured_areas()
+        # 選択中の領域を表示（最前面）
+        if self.selecting and self.selection_start is not None and self.selection_end is not None:
+            self._draw_selection()
         
-        # 情報パネル
-        self._draw_info_panel()
+        # 情報パネル（トグル可能）
+        if self.show_panel:
+            self._draw_info_panel()
         
-        # マウス位置を表示
-        self._draw_mouse_position()
+        # マウス位置を表示（トグル可能）
+        if self.show_mouse_pos:
+            self._draw_mouse_position()
         
         # 画面更新
         pygame.display.update()
@@ -224,20 +249,28 @@ class SetupWizard:
         width = abs(x2 - x1)
         height = abs(y2 - y1)
         
-        # 選択範囲を描画
+        # 選択範囲を描画（より透明）
         selection_surface = pygame.Surface((width, height), pygame.SRCALPHA)
         selection_surface.fill(self.selection_color)
         self.screen.blit(selection_surface, (left, top))
         
-        # 枠線
+        # 枠線（細めに）
         pygame.draw.rect(self.screen, self.highlight_color, 
-                        (left, top, width, height), 2)
+                        (left, top, width, height), 1)
         
-        # 座標表示
+        # 座標表示（シンプルに）
         pos_text = self.small_font.render(
             f"({left}, {top}, {left+width}, {top+height})", 
             True, self.highlight_color)
-        self.screen.blit(pos_text, (left, top + height + 5))
+        
+        # 座標表示の背景（よりコンパクトで透明に）
+        text_width, text_height = pos_text.get_size()
+        text_bg = pygame.Surface((text_width + 10, text_height + 4), pygame.SRCALPHA)
+        text_bg.fill((0, 0, 0, 80))  # 背景をより透明に
+        
+        # 画面の下部に表示して邪魔にならないように
+        self.screen.blit(text_bg, (left, top + height + 5))
+        self.screen.blit(pos_text, (left + 5, top + height + 7))
     
     def _draw_completed_selection(self):
         """選択完了した領域を描画"""
@@ -264,17 +297,17 @@ class SetupWizard:
         width = right - left
         height = bottom - top
         
-        # 選択範囲を描画（淡いハイライト）
+        # 選択範囲を描画（よりシンプルで透明に）
         selection_surface = pygame.Surface((width, height), pygame.SRCALPHA)
-        selection_surface.fill((100, 255, 100, 100))  # 緑色
+        selection_surface.fill(self.completed_selection_color)
         self.screen.blit(selection_surface, (left, top))
         
-        # 枠線
-        pygame.draw.rect(self.screen, (0, 255, 0), 
-                        (left, top, width, height), 2)
+        # 枠線（より薄く）
+        pygame.draw.rect(self.screen, (0, 255, 0, 128), 
+                        (left, top, width, height), 1)
     
     def _draw_configured_areas(self):
-        """設定済みの領域を表示"""
+        """設定済みの領域を表示（より透明に）"""
         # 他の設定済み領域を薄く表示
         areas = []
         
@@ -301,31 +334,32 @@ class SetupWizard:
         for name, area in areas:
             x1, y1, x2, y2 = area
             
-            # 半透明の領域
+            # 非常に透明な領域
             width = x2 - x1
             height = y2 - y1
             
             area_surface = pygame.Surface((width, height), pygame.SRCALPHA)
-            area_surface.fill((100, 100, 100, 80))
+            area_surface.fill(self.configured_area_color)
             self.screen.blit(area_surface, (x1, y1))
             
-            # 枠線
-            pygame.draw.rect(self.screen, (200, 200, 200), 
+            # 細い枠線
+            pygame.draw.rect(self.screen, (200, 200, 200, 100), 
                             (x1, y1, width, height), 1)
             
-            # 名前表示
-            name_text = self.small_font.render(name, True, (200, 200, 200))
-            self.screen.blit(name_text, (x1 + 5, y1 + 5))
+            # 必要な時だけ名前表示
+            if self.show_panel:
+                name_text = self.small_font.render(name, True, (200, 200, 200, 150))
+                self.screen.blit(name_text, (x1 + 5, y1 + 5))
     
     def _draw_info_panel(self):
-        """情報パネルを描画"""
+        """情報パネルを描画（より透明に）"""
         # パネル背景
         panel = pygame.Surface((self.panel_width, self.panel_height), pygame.SRCALPHA)
-        panel.fill((0, 0, 0, 180))
+        panel.fill((0, 0, 0, 120))  # より透明に
         
-        # 枠線
+        # 枠線（細めに）
         pygame.draw.rect(panel, self.highlight_color, 
-                        (0, 0, self.panel_width, self.panel_height), 2)
+                        (0, 0, self.panel_width, self.panel_height), 1)
         
         # タイトル
         title = self.title_font.render(
@@ -349,16 +383,21 @@ class SetupWizard:
         self.screen.blit(panel, (self.panel_x, self.panel_y))
     
     def _draw_mouse_position(self):
-        """マウス位置を表示"""
+        """マウス位置を表示（よりシンプルに）"""
         x, y = self.mouse_pos
         pos_text = self.small_font.render(f"X: {x}, Y: {y}", True, (255, 255, 255))
         
-        # 背景付きで表示（読みやすくするため）
-        text_bg = pygame.Surface((100, 20), pygame.SRCALPHA)
-        text_bg.fill((0, 0, 0, 150))
+        # 背景付きで表示（読みやすくするため、より透明に）
+        text_width, text_height = pos_text.get_size()
+        text_bg = pygame.Surface((text_width + 10, text_height + 4), pygame.SRCALPHA)
+        text_bg.fill((0, 0, 0, 80))  # 背景をより透明に
         
-        self.screen.blit(text_bg, (x + 15, y + 15))
-        self.screen.blit(pos_text, (x + 20, y + 17))
+        # 右下に表示して邪魔にならないように
+        pos_x = self.width - text_width - 30
+        pos_y = self.height - text_height - 20
+        
+        self.screen.blit(text_bg, (pos_x - 5, pos_y - 2))
+        self.screen.blit(pos_text, (pos_x, pos_y))
     
     def _set_current_area(self):
         """現在の選択範囲を設定に反映"""
