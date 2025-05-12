@@ -10,6 +10,8 @@ import logging
 import cv2
 import numpy as np
 import tensorflow as tf
+import time
+import random
 from PIL import ImageGrab
 
 logger = logging.getLogger("MahjongAssistant.Recognizer")
@@ -53,6 +55,10 @@ class MahjongSoulRecognizer:
         self.turn_indicator_area = self.screen_areas.get(
             'turn_indicator_area', default_areas['turn_indicator_area']
         )
+        
+        # 前回のデモデータ
+        self.last_demo_data = None
+        self.last_update_time = 0
         
         # 学習済みモデルのロード
         model_path = os.path.join(os.path.dirname(__file__), "../models/tile_recognition_model")
@@ -142,9 +148,15 @@ class MahjongSoulRecognizer:
             認識された牌のリスト
         """
         if self.model is None:
-            # デモモード: ダミーデータを返す
-            return self._demo_hand_tiles()
+            # デモモード: ランダムな手牌データを生成（30秒ごとに更新）
+            current_time = time.time()
+            if self.last_demo_data is None or current_time - self.last_update_time > 30:
+                self.last_demo_data = self._generate_demo_hand_tiles()
+                self.last_update_time = current_time
+                logger.debug("デモ手牌データを更新しました")
+            return self.last_demo_data
         
+        # 実際の画像認識コード（モデルがある場合のみ実行）
         # HSV色空間に変換して牌の検出を容易に
         hsv = cv2.cvtColor(hand_img, cv2.COLOR_RGB2HSV)
         
@@ -181,8 +193,17 @@ class MahjongSoulRecognizer:
             認識されたドラ表示牌のリスト
         """
         if self.model is None:
-            # デモモード: ダミーデータを返す
-            return [8, 20]  # 3萬, 6筒をドラと仮定
+            # デモモード: ランダムなドラ表示牌
+            # 現在の手牌データを基にランダムなドラを生成
+            if hasattr(self, 'last_demo_data') and self.last_demo_data:
+                # 手牌にないランダムな牌をドラにする
+                all_tiles = list(range(0, 136, 4))  # 0, 4, 8, ...
+                for tile in self.last_demo_data:
+                    if tile in all_tiles:
+                        all_tiles.remove(tile)
+                return random.sample(all_tiles, min(2, len(all_tiles)))
+            else:
+                return [8, 20]  # デフォルト: 3萬, 6筒をドラと仮定
         
         # 処理は手牌認識と同様
         # ここでは簡略化のためにダミー実装
@@ -203,8 +224,19 @@ class MahjongSoulRecognizer:
             認識された捨て牌のリスト
         """
         if self.model is None:
-            # デモモード: ダミーデータを返す
-            return [4, 16, 32, 40]  # いくつかの捨て牌を仮定
+            # デモモード: 河は毎回少しずつ変わるようにする
+            river_size = random.randint(3, 6)  # 3〜6枚の捨て牌
+            # 乱数シードを固定して毎回同じような結果を出すが、微妙に変化する
+            random.seed(int(time.time() / 10))  # 10秒ごとに変化
+            
+            # 手牌と被らないようにする
+            all_tiles = list(range(0, 136, 4))  # 0, 4, 8, ...
+            if hasattr(self, 'last_demo_data') and self.last_demo_data:
+                for tile in self.last_demo_data:
+                    if tile in all_tiles:
+                        all_tiles.remove(tile)
+            
+            return random.sample(all_tiles, min(river_size, len(all_tiles)))
         
         # 処理は手牌認識と同様
         # ここでは簡略化のためにダミー実装
@@ -347,8 +379,19 @@ class MahjongSoulRecognizer:
         list
             各プレイヤーのリーチ状態 (True/False)
         """
-        # デモモード: ダミーデータを返す
-        # プレイヤー0が自分、1が右家、2が対面、3が左家
+        # デモモード: ランダムにリーチ状態を生成
+        if self.model is None:
+            # 10%の確率でリーチ状態を変更
+            if not hasattr(self, 'demo_reach') or random.random() < 0.1:
+                # 誰かがリーチしている確率は30%
+                if random.random() < 0.3:
+                    player = random.randint(0, 3)
+                    self.demo_reach = [i == player for i in range(4)]
+                else:
+                    self.demo_reach = [False, False, False, False]
+            return self.demo_reach
+        
+        # 実際の検出処理
         return [False, False, True, False]  # 対面がリーチと仮定
     
     def _detect_scores(self, screen):
@@ -365,7 +408,22 @@ class MahjongSoulRecognizer:
         list
             各プレイヤーの点数
         """
-        # デモモード: ダミーデータを返す
+        # デモモード: 適当な点数
+        if self.model is None:
+            if not hasattr(self, 'demo_scores'):
+                # 初期点数は25000
+                self.demo_scores = [25000, 25000, 25000, 25000]
+            else:
+                # 5%の確率で点数変動
+                if random.random() < 0.05:
+                    # 点棒移動（誰かが1000点失い、誰かが1000点得る）
+                    loser = random.randint(0, 3)
+                    winner = (loser + random.randint(1, 3)) % 4
+                    self.demo_scores[loser] -= 1000
+                    self.demo_scores[winner] += 1000
+            return self.demo_scores
+        
+        # 実際の検出処理
         return [25000, 25000, 25000, 25000]
     
     def _detect_current_player(self, screen):
@@ -382,7 +440,15 @@ class MahjongSoulRecognizer:
         int
             現在の手番プレイヤーID（0:自分、1:右家、2:対面、3:左家）
         """
-        # デモモード: ダミーデータを返す
+        # デモモード: ランダムに手番を変更（主に自分の番）
+        if self.model is None:
+            # 50%の確率で自分の番
+            if random.random() < 0.5:
+                return 0
+            else:
+                return random.randint(1, 3)
+        
+        # 実際の検出処理
         return 0  # 自分の番と仮定
     
     def _empty_game_state(self):
@@ -403,14 +469,68 @@ class MahjongSoulRecognizer:
             'current_player': 0
         }
     
-    def _demo_hand_tiles(self):
+    def _generate_demo_hand_tiles(self):
         """
-        デモ用の手牌データを生成
+        デモ用の手牌データを生成（より麻雀らしい手牌）
         
         Returns
         -------
         list
             デモ用の手牌リスト
         """
-        # 一般的な良形の手牌を返す（テスト用）
-        return [0, 4, 8, 36, 40, 44, 72, 76, 80, 108, 112, 116, 124]
+        # 麻雀の牌山から13枚をランダムに選ぶ
+        # 1枚4つあるので、tile_id * 4 とする（0, 4, 8, ...）
+        
+        # 種類ごとに選ぶ確率を調整
+        tiles = []
+        
+        # 一定確率でメンツ（同じ数字3枚）を含める
+        if random.random() < 0.7:  # 70%の確率でメンツを含める
+            # メンツの基本牌を選ぶ
+            base_tile = random.randint(0, 33)
+            tiles.extend([base_tile * 4, base_tile * 4 + 1, base_tile * 4 + 2])
+        
+        # 一定確率で順子（連続する3枚）を含める
+        if random.random() < 0.7:  # 70%の確率で順子を含める
+            # 数牌から選ぶ（1-7スタート）
+            suit = random.randint(0, 2)  # 0:萬子, 1:筒子, 2:索子
+            start = random.randint(0, 6)  # 1-7
+            
+            base1 = suit * 9 + start
+            base2 = suit * 9 + start + 1
+            base3 = suit * 9 + start + 2
+            
+            tiles.extend([base1 * 4, base2 * 4, base3 * 4])
+        
+        # 一定確率で対子（同じ数字2枚）を含める
+        if random.random() < 0.8:  # 80%の確率で対子を含める
+            # 対子の基本牌を選ぶ
+            base_tile = random.randint(0, 33)
+            # すでに3枚使っている場合は別の牌を選ぶ
+            count = tiles.count(base_tile * 4)
+            while count >= 3:
+                base_tile = random.randint(0, 33)
+                count = tiles.count(base_tile * 4)
+            
+            tiles.extend([base_tile * 4, base_tile * 4 + 1])
+        
+        # 残りをランダムな牌で埋める
+        all_tiles = []
+        for i in range(34):  # 34種類
+            all_tiles.extend([i * 4, i * 4 + 1, i * 4 + 2, i * 4 + 3])
+        
+        # すでに選ばれた牌を除外
+        for tile in tiles:
+            if tile in all_tiles:
+                all_tiles.remove(tile)
+        
+        # 残りの枚数を選ぶ
+        remaining = 13 - len(tiles)
+        if remaining > 0:
+            tiles.extend(random.sample(all_tiles, remaining))
+        
+        # 並べ替え
+        tiles.sort()
+        
+        logger.debug(f"デモ手牌生成: {tiles}")
+        return tiles
