@@ -54,10 +54,8 @@ class MahjongSoulUI:
         self.danger_color = (217, 79, 70)  # 赤色（危険牌用）
         self.demo_color = (255, 165, 0)  # オレンジ色（デモモード表示用）
         
-        # フォント設定
-        self.title_font = pygame.font.SysFont("notosanscjkjp", 28, bold=True)
-        self.normal_font = pygame.font.SysFont("notosanscjkjp", 20)
-        self.small_font = pygame.font.SysFont("notosanscjkjp", 16)
+        # フォント設定 - 日本語フォントの問題に対応
+        self._setup_fonts()
         
         # 牌画像の読み込み
         self.tile_images = self._load_tile_images()
@@ -75,6 +73,48 @@ class MahjongSoulUI:
         self.current_display_state = {}
         
         logger.info("MahjongSoulUI初期化完了")
+    
+    def _setup_fonts(self):
+        """日本語フォントの設定"""
+        # 日本語フォント検索順序
+        jp_font_names = [
+            "Yu Gothic", "YuGothic",
+            "MS Gothic", "MS PGothic", "MS Mincho", "MS PMincho",
+            "Meiryo", "Meiryo UI",
+            "Hiragino Sans", "Hiragino Kaku Gothic Pro",
+            "Noto Sans CJK JP", "Noto Sans JP",
+            "VL Gothic", "TakaoGothic", "IPAGothic", 
+            "IPAPGothic", "IPAexGothic",
+            "Droid Sans Japanese", "Droid Sans Fallback",
+            # フォントファイル名（.ttfなし）
+            "msgothic", "meiryo", "yumin", "yugothic", "ipagp"
+        ]
+        
+        # システムフォントリスト取得
+        system_fonts = pygame.font.get_fonts()
+        logger.debug(f"システムフォント: {system_fonts[:10]}...")
+        
+        # 利用可能な日本語フォントを探す
+        for font_name in jp_font_names:
+            if font_name.lower() in system_fonts:
+                self.font_name = font_name
+                logger.info(f"日本語フォント: {font_name} を使用します")
+                break
+        else:
+            # 見つからない場合はデフォルトフォントを使用
+            self.font_name = pygame.font.get_default_font()
+            logger.warning(f"日本語フォントが見つかりません。デフォルト({self.font_name})を使用します")
+        
+        try:
+            self.title_font = pygame.font.SysFont(self.font_name, 28, bold=True)
+            self.normal_font = pygame.font.SysFont(self.font_name, 20)
+            self.small_font = pygame.font.SysFont(self.font_name, 16)
+        except Exception as e:
+            logger.error(f"フォント初期化エラー: {e}")
+            # フォールバック - デフォルトフォント
+            self.title_font = pygame.font.Font(None, 28)
+            self.normal_font = pygame.font.Font(None, 20)
+            self.small_font = pygame.font.Font(None, 16)
     
     def update(self, display_state):
         """
