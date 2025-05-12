@@ -72,8 +72,9 @@ python main.py
 - `ui/`: ユーザーインターフェース
   - `assistant_ui.py`: メイン表示UI
   - `setup_wizard.py`: 初期設定ウィザード
-- `assets/`: 画像・サウンドなどのリソース
 - `models/`: 学習済みモデル
+- `dataset/`: 学習用のデータセット
+  - `tiles/`: 牌画像のデータセット（トレーニング後に作成）
 - `tools/`: 開発・トレーニング用ツール
   - `organize_tile_images.py`: 画像整理ツール
   - `train_tile_recognition.py`: モデルトレーニングツール
