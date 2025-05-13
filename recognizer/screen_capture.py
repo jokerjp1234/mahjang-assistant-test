@@ -81,7 +81,7 @@ class ScreenCapture:
         """
         # 領域の存在確認
         if region_name not in self.regions:
-            raise ValueError(f"領域名 '{region_name}' は定義されていません")
+            return None  # 領域が存在しない場合はNoneを返す
         
         # キャプチャ間隔の制限
         current_time = time.time()
@@ -142,12 +142,27 @@ class ScreenCapture:
         river_img = self.capture_region('river')
         melds_img = self.capture_region('melds')
         
+        # 相手の河と副露（設定されていれば）
+        right_river_img = self.capture_region('right_river')
+        oppo_river_img = self.capture_region('opposite_river')
+        left_river_img = self.capture_region('left_river')
+        
+        right_melds_img = self.capture_region('right_melds')
+        oppo_melds_img = self.capture_region('opposite_melds')
+        left_melds_img = self.capture_region('left_melds')
+        
         return {
             'screen': screen,
             'hand': hand_img,
             'dora': dora_img,
             'river': river_img,
-            'melds': melds_img
+            'melds': melds_img,
+            'right_river': right_river_img,
+            'opposite_river': oppo_river_img,
+            'left_river': left_river_img,
+            'right_melds': right_melds_img,
+            'opposite_melds': oppo_melds_img,
+            'left_melds': left_melds_img
         }
     
     def find_window_by_title(self, title_keyword):
@@ -234,12 +249,65 @@ class ScreenCapture:
                 ('hand', '手牌エリア'),
                 ('dora', 'ドラ表示エリア'),
                 ('river', '自分の河'),
-                ('melds', '副露エリア')
+                ('melds', '副露エリア'),
+                ('right_river', '右家の河'),
+                ('opposite_river', '対面の河'),
+                ('left_river', '左家の河'),
+                ('right_melds', '右家の副露'),
+                ('opposite_melds', '対面の副露'),
+                ('left_melds', '左家の副露')
             ]
             
             for region_name, region_desc in regions_to_set:
                 print(f"\n{region_desc}を選択してください:")
                 print("画面上でマウスをドラッグして領域を選択し、ENTERキーを押して確定します")
+                print("この領域をスキップする場合は、何も選択せずにENTERキーを押してください")
+                
+                # 領域選択用の矩形
+                roi = cv2.selectROI("Screen Setup", screen, False, False)
+                
+                if roi[2] > 0 and roi[3] > 0:  # 幅と高さが正の値
+                    x, y, w, h = roi
+                    self.regions[region_name] = (x, y, x+w, y+h)
+                    print(f"{region_desc}の座標: {self.regions[region_name]}")
+                else:
+                    print(f"{region_desc}の選択をスキップしました")
+            
+            cv2.destroyAllWindows()
+            print("\n領域設定が完了しました")
+            
+            # 設定を保存
+            self.save_regions_config()
+            
+        except Exception as e:
+            cv2.destroyAllWindows()
+            print(f"領域設定中にエラーが発生しました: {e}")
+    
+    def setup_regions_interactive_with_list(self, regions_list):
+        """
+        指定された領域リストを用いて対話モードで各領域の座標を設定する
+        
+        Parameters
+        ----------
+        regions_list : list
+            設定する領域のリスト [(region_name, region_description), ...]
+        """
+        print("画面領域設定ウィザードを開始します")
+        print("この機能を使用すると、画面の各部分を選択して座標を設定できます")
+        
+        try:
+            # 全画面キャプチャ
+            screen = np.array(ImageGrab.grab())
+            screen = cv2.cvtColor(screen, cv2.COLOR_RGB2BGR)
+            
+            # ウィンドウの作成
+            cv2.namedWindow("Screen Setup", cv2.WINDOW_NORMAL)
+            cv2.setWindowProperty("Screen Setup", cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
+            
+            for region_name, region_desc in regions_list:
+                print(f"\n{region_desc}を選択してください:")
+                print("画面上でマウスをドラッグして領域を選択し、ENTERキーを押して確定します")
+                print("この領域をスキップする場合は、何も選択せずにENTERキーを押してください")
                 
                 # 領域選択用の矩形
                 roi = cv2.selectROI("Screen Setup", screen, False, False)
@@ -347,7 +415,8 @@ def main():
     if args.capture:
         captures = screen_capture.capture_all_regions()
         for region_name, image in captures.items():
-            screen_capture.save_last_capture(region_name, args.output)
+            if image is not None:
+                screen_capture.save_last_capture(region_name, args.output)
         return
     
     # デモ表示モード
@@ -358,7 +427,7 @@ def main():
             
             # 各領域の表示
             for region_name, image in captures.items():
-                if image.size > 0:  # 画像が有効な場合
+                if image is not None and image.size > 0:  # 画像が有効な場合
                     cv2.imshow(f"Region: {region_name}", image)
             
             # キー入力の確認
