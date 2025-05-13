@@ -50,14 +50,22 @@ TILE_TYPES = {
 def parse_arguments():
     """コマンドライン引数を解析する"""
     parser = argparse.ArgumentParser(description='麻雀牌画像整理ツール')
-    parser.add_argument('--input_dir', type=str, required=True,
-                        help='撮影した麻雀牌画像が格納されているディレクトリ')
+    parser.add_argument('--input_dir', type=str, default='./raw_images',
+                        help='撮影した麻雀牌画像が格納されているディレクトリ（デフォルト: ./raw_images）')
     parser.add_argument('--output_dir', type=str, default='./dataset/tiles',
-                        help='整理された画像を保存するディレクトリ')
+                        help='整理された画像を保存するディレクトリ（デフォルト: ./dataset/tiles）')
     parser.add_argument('--resize', type=str, default='64x64',
-                        help='リサイズするサイズ（例: 64x64）')
+                        help='リサイズするサイズ（例: 64x64）（デフォルト: 64x64）')
     parser.add_argument('--interactive', action='store_true',
                         help='対話モードで各画像を確認しながら分類')
+    parser.add_argument('--auto_create', action='store_true',
+                        help='入力ディレクトリが存在しない場合に自動作成する')
+    
+    # 引数をパースし、ヘルプが必要かチェック
+    if len(sys.argv) == 1:
+        parser.print_help()
+        sys.exit(0)
+    
     return parser.parse_args()
 
 
@@ -80,9 +88,12 @@ def show_image_and_get_type(image, window_name="Select Tile Type"):
     print("\n")
     
     while True:
-        tile_type = input("この画像の牌の種類を選択してください（IDを入力、xでスキップ）: ")
+        tile_type = input("この画像の牌の種類を選択してください（IDを入力、xでスキップ、qで終了）: ")
         if tile_type == 'x':
             return None
+        if tile_type == 'q':
+            print("処理を中断します。")
+            sys.exit(0)
         if tile_type in TILE_TYPES:
             return tile_type
         print("無効な牌タイプです。もう一度入力してください。")
@@ -95,8 +106,18 @@ def main():
     # 入力ディレクトリの存在確認
     input_dir = Path(args.input_dir)
     if not input_dir.exists():
-        print(f"エラー: 入力ディレクトリ '{input_dir}' が存在しません。")
-        sys.exit(1)
+        if args.auto_create:
+            print(f"入力ディレクトリ '{input_dir}' が存在しないため、作成します。")
+            input_dir.mkdir(parents=True, exist_ok=True)
+            print(f"'{input_dir}' にサンプル画像を配置してください。")
+            print("プログラムを終了します。プログラムを再実行してください。")
+            sys.exit(0)
+        else:
+            print(f"エラー: 入力ディレクトリ '{input_dir}' が存在しません。")
+            print("以下のオプションがあります:")
+            print("1. --auto_create オプションを使用して自動的に作成")
+            print("2. 手動で入力ディレクトリを作成")
+            sys.exit(1)
     
     # 出力ディレクトリの作成
     output_dir = Path(args.output_dir)
@@ -118,6 +139,13 @@ def main():
     image_files = []
     for ext in valid_extensions:
         image_files.extend(list(input_dir.glob(f'*{ext}')))
+        # 大文字の拡張子も対応
+        image_files.extend(list(input_dir.glob(f'*{ext.upper()}')))
+    
+    if not image_files:
+        print(f"警告: 入力ディレクトリ '{input_dir}' に画像ファイルが見つかりません。")
+        print(f"対応している拡張子: {', '.join(valid_extensions)}")
+        sys.exit(1)
     
     print(f"合計 {len(image_files)} 個の画像ファイルが見つかりました。")
     
@@ -128,6 +156,11 @@ def main():
     if args.interactive:
         cv2.namedWindow("Select Tile Type", cv2.WINDOW_NORMAL)
         cv2.resizeWindow("Select Tile Type", 400, 400)  # ウィンドウサイズの調整
+        
+        print("\n対話モードを開始します。各画像を表示し、牌の種類を選択していただきます。")
+        print("- 各牌タイプのID（例: m1, p5, zeast）を入力して選択")
+        print("- 'x' を入力するとその画像をスキップ（未分類として保存）")
+        print("- 'q' を入力するといつでも終了できます")
         
         for idx, img_path in enumerate(image_files):
             print(f"\n画像 {idx+1}/{len(image_files)}: {img_path.name}")
@@ -205,6 +238,33 @@ def main():
     print("\n画像の整理が完了しました！")
     print(f"分類された画像は {output_dir} に保存されました。")
     print(f"未分類の画像は {unclassified_dir} にあります。")
+    
+    # クラスごとの画像数を表示
+    print("\n各牌タイプの画像数:")
+    for tile_id in TILE_TYPES.keys():
+        tile_dir = output_dir / tile_id
+        img_count = len(list(tile_dir.glob('*.jpg'))) + len(list(tile_dir.glob('*.png')))
+        if img_count > 0:
+            print(f"{tile_id} ({TILE_TYPES[tile_id]}): {img_count}枚")
+    
+    # 学習に十分なデータがあるか確認
+    min_count = 10  # 最小推奨枚数
+    low_count_classes = []
+    
+    for tile_id in TILE_TYPES.keys():
+        tile_dir = output_dir / tile_id
+        img_count = len(list(tile_dir.glob('*.jpg'))) + len(list(tile_dir.glob('*.png')))
+        if img_count < min_count:
+            low_count_classes.append((tile_id, img_count))
+    
+    if low_count_classes:
+        print("\n警告: 以下の牌タイプは学習に十分な画像数がありません（推奨: 各タイプ10枚以上）")
+        for tile_id, count in low_count_classes:
+            print(f"{tile_id} ({TILE_TYPES[tile_id]}): {count}枚")
+        
+        print("\n学習の精度を高めるために、これらの牌タイプの画像を追加してください。")
+    else:
+        print("\n全ての牌タイプに十分な画像数があります。このデータセットで学習を開始できます。")
 
 
 if __name__ == "__main__":
