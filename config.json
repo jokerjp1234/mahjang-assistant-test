@@ -1,0 +1,19 @@
+{
+    "hotkey": "ctrl+alt+h",
+    "update_interval": 0.5,
+    "ui": {
+        "width": 300,
+        "height": 600,
+        "position": [10, 10],
+        "opacity": 0.8,
+        "font_size": 16,
+        "colors": {
+            "background": [0, 0, 0],
+            "text": [255, 255, 255],
+            "highlight": [255, 100, 100],
+            "good": [100, 255, 100],
+            "warning": [255, 255, 100],
+            "danger": [255, 100, 100]
+        }
+    }
+}
