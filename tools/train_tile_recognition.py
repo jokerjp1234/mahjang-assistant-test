@@ -181,6 +181,62 @@ def plot_training_history(history, output_dir):
     plt.close()
 
 
+def save_model_safely(model, output_dir):
+    """さまざまな形式でモデルを安全に保存する"""
+    # 出力ディレクトリが存在することを確認
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    
+    # 1. Keras形式 (.keras)
+    try:
+        keras_path = output_dir / 'model.keras'
+        model.save(keras_path)
+        print(f"Kerasモデルを保存しました: {keras_path}")
+    except Exception as e:
+        print(f"Keras形式での保存に失敗しました: {e}")
+        try:
+            # 代替：.h5形式
+            h5_path = output_dir / 'model.h5'
+            model.save(h5_path)
+            print(f"H5モデルを保存しました: {h5_path}")
+        except Exception as e2:
+            print(f"H5形式での保存にも失敗しました: {e2}")
+    
+    # 2. SavedModel形式
+    try:
+        saved_model_dir = output_dir / 'saved_model'
+        tf.saved_model.save(model, str(saved_model_dir))
+        print(f"SavedModelを保存しました: {saved_model_dir}")
+    except Exception as e:
+        print(f"SavedModel形式での保存に失敗しました: {e}")
+        try:
+            # 代替：exportメソッド（TF 2.13以降）
+            export_dir = output_dir / 'exported_model'
+            if hasattr(model, 'export'):
+                model.export(export_dir)
+                print(f"Exportされたモデルを保存しました: {export_dir}")
+            else:
+                print("モデルにexportメソッドがありません。TensorFlow 2.13以降が必要です。")
+        except Exception as e2:
+            print(f"Export形式での保存にも失敗しました: {e2}")
+    
+    # 3. TFLite形式
+    try:
+        # TFLiteコンバーターの作成
+        converter = tf.lite.TFLiteConverter.from_keras_model(model)
+        converter.optimizations = [tf.lite.Optimize.DEFAULT]
+        tflite_model = converter.convert()
+        
+        # TFLiteモデルを保存
+        tflite_path = output_dir / 'model.tflite'
+        with open(tflite_path, 'wb') as f:
+            f.write(tflite_model)
+        
+        print(f"TensorFlow Liteモデルを保存しました: {tflite_path}")
+    except Exception as e:
+        print(f"TFLite形式での保存に失敗しました: {e}")
+
+
 def main():
     """メイン関数"""
     # 引数の解析
@@ -304,12 +360,9 @@ def main():
     # トレーニング履歴のプロット
     plot_training_history(history, output_dir)
     
-    # 最終モデルの保存 - 拡張子を.kerasに変更
-    model.save(output_dir / 'final_model.keras')
-    
-    # TensorFlow SavedModel形式での保存 - エクスポート関数を使用
-    # 最新のTensorFlowでは、SavedModel形式にはexportを使用
-    tf.keras.models.save_model(model, output_dir / 'saved_model')
+    # モデルの安全な保存
+    print("\nモデルを保存しています...")
+    save_model_safely(model, output_dir)
     
     print(f"\nトレーニングが完了しました！")
     print(f"モデルは {output_dir} に保存されました。")
@@ -354,8 +407,8 @@ def main():
         for i in range(cm.shape[0]):
             for j in range(cm.shape[1]):
                 plt.text(j, i, format(cm[i, j], 'd'),
-                        horizontalalignment="center",
-                        color="white" if cm[i, j] > thresh else "black")
+                         horizontalalignment="center",
+                         color="white" if cm[i, j] > thresh else "black")
         
         plt.tight_layout()
         plt.ylabel('True label')
@@ -373,23 +426,6 @@ def main():
         
     except Exception as e:
         print(f"混同行列の生成中にエラーが発生しました: {e}")
-    
-    
-    # アプリケーション用のモデル変換（TFLiteの作成）
-    try:
-        print("\nTensorFlow Liteモデルへの変換中...")
-        converter = tf.lite.TFLiteConverter.from_keras_model(model)
-        converter.optimizations = [tf.lite.Optimize.DEFAULT]
-        tflite_model = converter.convert()
-        
-        # TFLiteモデルを保存
-        with open(output_dir / 'model.tflite', 'wb') as f:
-            f.write(tflite_model)
-        
-        print(f"TensorFlow Liteモデルを保存しました: {output_dir / 'model.tflite'}")
-    
-    except Exception as e:
-        print(f"TFLite変換中にエラーが発生しました: {e}")
 
 
 def predict_sample_images(model, data_dir, output_dir, image_size):
