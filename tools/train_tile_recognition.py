@@ -304,11 +304,12 @@ def main():
     # トレーニング履歴のプロット
     plot_training_history(history, output_dir)
     
-    # 最終モデルの保存
-    model.save(output_dir / 'final_model.h5')
+    # 最終モデルの保存 - 拡張子を.kerasに変更
+    model.save(output_dir / 'final_model.keras')
     
-    # TensorFlow SavedModel形式での保存
-    model.save(output_dir / 'saved_model')
+    # TensorFlow SavedModel形式での保存 - エクスポート関数を使用
+    # 最新のTensorFlowでは、SavedModel形式にはexportを使用
+    tf.keras.models.save_model(model, output_dir / 'saved_model')
     
     print(f"\nトレーニングが完了しました！")
     print(f"モデルは {output_dir} に保存されました。")
