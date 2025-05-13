@@ -2,495 +2,720 @@
 # -*- coding: utf-8 -*-
 
 """
-麻雀ロジックエンジン - 雀魂(Mahjong Soul)向け
+麻雀戦略エンジン
+
+このモジュールは、牌認識結果から最適な打牌戦略を決定するロジックを提供します。
+シャンテン数の計算、有効牌の判定、危険牌の判定などの機能を実装しています。
 """
 
 import os
-import logging
+import sys
 import numpy as np
-from collections import defaultdict
-
-# 自作モジュールのインポート
-from engine.shanten import ShantenCalculator
-
-logger = logging.getLogger("MahjongAssistant.Engine")
+from collections import Counter
 
 
-class MahjongSoulEngine:
-    """雀魂向け麻雀ロジックエンジン"""
+class MahjongEngine:
+    """麻雀戦略エンジンクラス"""
+    
+    # 牌の種類
+    TYPES = {
+        # 萬子 (manzu)
+        'm1': 0, 'm2': 1, 'm3': 2, 'm4': 3, 'm5': 4, 'm6': 5, 'm7': 6, 'm8': 7, 'm9': 8,
+        # 筒子 (pinzu)
+        'p1': 9, 'p2': 10, 'p3': 11, 'p4': 12, 'p5': 13, 'p6': 14, 'p7': 15, 'p8': 16, 'p9': 17,
+        # 索子 (souzu)
+        's1': 18, 's2': 19, 's3': 20, 's4': 21, 's5': 22, 's6': 23, 's7': 24, 's8': 25, 's9': 26,
+        # 字牌 (jihai)
+        'zeast': 27, 'zsouth': 28, 'zwest': 29, 'znorth': 30, 'zwhite': 31, 'zgreen': 32, 'zred': 33
+    }
+    
+    # 牌IDから表示名へのマッピング
+    TILE_NAMES = {
+        # 萬子 (manzu)
+        'm1': '一萬', 'm2': '二萬', 'm3': '三萬', 'm4': '四萬', 'm5': '五萬',
+        'm6': '六萬', 'm7': '七萬', 'm8': '八萬', 'm9': '九萬',
+        # 筒子 (pinzu)
+        'p1': '一筒', 'p2': '二筒', 'p3': '三筒', 'p4': '四筒', 'p5': '五筒',
+        'p6': '六筒', 'p7': '七筒', 'p8': '八筒', 'p9': '九筒',
+        # 索子 (souzu)
+        's1': '一索', 's2': '二索', 's3': '三索', 's4': '四索', 's5': '五索',
+        's6': '六索', 's7': '七索', 's8': '八索', 's9': '九索',
+        # 字牌 (jihai)
+        'zeast': '東', 'zsouth': '南', 'zwest': '西', 'znorth': '北',
+        'zwhite': '白', 'zgreen': '發', 'zred': '中'
+    }
     
     def __init__(self):
         """初期化"""
-        # シャンテン数計算機の初期化
-        self.shanten_calculator = ShantenCalculator()
-        
-        # 雀魂特有のルール設定
-        self.red_dora_enabled = True  # 赤ドラあり
-        self.open_tanyao_enabled = True  # 喰いタンあり
-        self.akadora_count = 3  # 赤ドラ3枚（萬子・筒子・索子に各1枚）
-        
-        # 牌の種類数
-        self.num_tiles = 34
-        
-        # 牌の残り枚数（ゲーム開始時）
-        self.remaining_tiles = [4] * self.num_tiles
-        
         # ゲーム状態
-        self.game_state = {}
+        self.hand = []          # 手牌
+        self.visible_tiles = {} # 見えている牌（河や副露）
+        self.dora = []          # ドラ表示牌
+        self.discards = []      # 自分の捨て牌
+        self.melds = []         # 自分の副露
         
-        logger.info("MahjongSoulEngine初期化完了")
+        # 牌の残り枚数（理論値）
+        self.remaining_tiles = {tile_id: 4 for tile_id in self.TYPES.keys()}
     
-    def calculate_shanten(self, hand_tiles, melds=None):
+    def set_hand(self, hand_tiles):
         """
-        シャンテン数を計算
+        手牌を設定する
         
         Parameters
         ----------
         hand_tiles : list
-            手牌のリスト（136形式）
-        melds : list, optional
-            副露のリスト
+            手牌のリスト（牌ID）
+        """
+        self.hand = list(hand_tiles)
+    
+    def set_melds(self, meld_tiles):
+        """
+        副露を設定する
         
+        Parameters
+        ----------
+        meld_tiles : list
+            副露牌のリスト（牌ID）
+        """
+        self.melds = list(meld_tiles)
+    
+    def add_visible_tiles(self, tiles):
+        """
+        見えている牌を追加する
+        
+        Parameters
+        ----------
+        tiles : list or dict
+            見えている牌のリストまたは辞書（牌ID: 枚数）
+        """
+        if isinstance(tiles, list):
+            # リストの場合はカウント
+            for tile in tiles:
+                if tile in self.visible_tiles:
+                    self.visible_tiles[tile] += 1
+                else:
+                    self.visible_tiles[tile] = 1
+        elif isinstance(tiles, dict):
+            # 辞書の場合はマージ
+            for tile, count in tiles.items():
+                if tile in self.visible_tiles:
+                    self.visible_tiles[tile] += count
+                else:
+                    self.visible_tiles[tile] = count
+    
+    def set_dora(self, dora_tiles):
+        """
+        ドラ表示牌を設定する
+        
+        Parameters
+        ----------
+        dora_tiles : list
+            ドラ表示牌のリスト（牌ID）
+        """
+        self.dora = list(dora_tiles)
+    
+    def add_discard(self, tile):
+        """
+        捨て牌を追加する
+        
+        Parameters
+        ----------
+        tile : str
+            捨てた牌のID
+        """
+        self.discards.append(tile)
+        
+        # 見えている牌に追加
+        if tile in self.visible_tiles:
+            self.visible_tiles[tile] += 1
+        else:
+            self.visible_tiles[tile] = 1
+    
+    def update_remaining_tiles(self):
+        """残り牌数を更新する"""
+        # 初期化
+        self.remaining_tiles = {tile_id: 4 for tile_id in self.TYPES.keys()}
+        
+        # 手牌を減算
+        for tile in self.hand:
+            if tile in self.remaining_tiles:
+                self.remaining_tiles[tile] -= 1
+        
+        # 副露を減算
+        for tile in self.melds:
+            if tile in self.remaining_tiles:
+                self.remaining_tiles[tile] -= 1
+        
+        # 見えている牌を減算
+        for tile, count in self.visible_tiles.items():
+            if tile in self.remaining_tiles:
+                self.remaining_tiles[tile] -= min(count, self.remaining_tiles[tile])
+    
+    def calculate_shanten(self, tiles=None):
+        """
+        シャンテン数を計算する
+        
+        Parameters
+        ----------
+        tiles : list, optional
+            計算対象の牌リスト。Noneの場合は現在の手牌を使用
+            
         Returns
         -------
         int
-            シャンテン数
+            シャンテン数（0: テンパイ、-1: 和了、n: n向聴）
         """
-        # 136形式から34形式に変換
-        hand34 = self._to_34_array(hand_tiles)
+        if tiles is None:
+            tiles = self.hand
         
-        # メルドがない場合は空リストを使用
-        if melds is None:
-            melds = []
+        # 簡易的なシャンテン計算（実際の麻雀では複雑なアルゴリズムが必要）
+        # この実装は簡略化されており、正確なシャンテン数を計算するものではありません
         
-        try:
-            # シャンテン数を計算
-            return self.shanten_calculator.calculate_shanten(hand34, melds)
-        except Exception as e:
-            logger.error(f"シャンテン数計算中にエラー: {e}")
-            # エラー時は適当な値を返す
-            return 4
+        # 牌の集計
+        tile_counts = Counter(tiles)
+        
+        # 対子の数
+        pairs = sum(1 for count in tile_counts.values() if count >= 2)
+        
+        # 順子の可能性（萬子、筒子、索子のみ）
+        sequences = 0
+        for suit in ['m', 'p', 's']:
+            for i in range(1, 8):  # 1-7（9まで）
+                if (f'{suit}{i}' in tile_counts and 
+                    f'{suit}{i+1}' in tile_counts and 
+                    f'{suit}{i+2}' in tile_counts):
+                    sequences += 1
+        
+        # 暗刻の数
+        triplets = sum(1 for count in tile_counts.values() if count >= 3)
+        
+        # セットの数（順子または暗刻）
+        sets = sequences + triplets
+        
+        # 必要なセットと雀頭
+        # 通常の和了形は4セット+1雀頭
+        needed_sets = 4
+        needed_pairs = 1
+        
+        # シャンテン数の計算
+        # 必要なセット数 + 必要な雀頭数 - 現在のセット数 - min(現在の対子数, 必要な雀頭数)
+        shanten = needed_sets + needed_pairs - sets - min(pairs, needed_pairs)
+        
+        return shanten
     
-    def calculate_effective_tiles(self, hand_tiles, melds=None):
+    def get_effective_tiles(self):
         """
-        有効牌を計算
+        有効牌（シャンテン数を減らす牌）を取得する
         
-        Parameters
-        ----------
-        hand_tiles : list
-            手牌のリスト（136形式）
-        melds : list, optional
-            副露のリスト
-            
         Returns
         -------
-        list
-            有効牌のリスト（34形式）
+        dict
+            牌ID: 改善度のマッピング
         """
-        # 136形式から34形式に変換
-        hand34 = self._to_34_array(hand_tiles)
+        # 現在のシャンテン数
+        current_shanten = self.calculate_shanten()
         
-        # メルドがない場合は空リストを使用
-        if melds is None:
-            melds = []
+        effective_tiles = {}
+        
+        # すべての牌タイプについて試す
+        for tile_id in self.TYPES.keys():
+            # この牌がまだ残っているか確認
+            if self.remaining_tiles.get(tile_id, 0) <= 0:
+                continue
             
-        try:
-            # 現在のシャンテン数を計算
-            current_shanten = self.shanten_calculator.calculate_shanten(hand34, melds)
+            # この牌を加えた場合のシャンテン数
+            test_hand = self.hand + [tile_id]
             
-            # 有効牌を探索
-            effective_tiles = []
-            for tile_id in range(self.num_tiles):
-                # この牌がすでに4枚使われていたらスキップ
-                if hand34[tile_id] >= 4:
-                    continue
+            # 手牌が14枚になるので、各牌を捨てる場合を試す
+            for i, discard in enumerate(test_hand):
+                test_tiles = test_hand.copy()
+                test_tiles.pop(i)  # 捨てる牌を除外
                 
-                # この牌を追加した場合の手牌
-                new_hand = hand34.copy()
-                new_hand[tile_id] += 1
+                # 新しいシャンテン数
+                new_shanten = self.calculate_shanten(test_tiles)
                 
-                # 追加後のシャンテン数を計算
-                new_shanten = self.shanten_calculator.calculate_shanten(new_hand, melds)
-                
-                # シャンテン数が下がる牌を有効牌とする
+                # シャンテン数が減る場合
                 if new_shanten < current_shanten:
-                    effective_tiles.append(tile_id)
-            
-            logger.debug(f"有効牌: {effective_tiles}")
-            return effective_tiles
-        except Exception as e:
-            logger.error(f"有効牌計算中にエラー: {e}")
-            # エラー時は適当な値を返す
-            return []
-    
-    def calculate_best_discard(self, hand_tiles, dora_tiles, all_discards, melds=None):
-        """
-        最適な捨て牌を計算
+                    improvement = current_shanten - new_shanten
+                    
+                    # 有効牌として登録
+                    if tile_id in effective_tiles:
+                        effective_tiles[tile_id] = max(effective_tiles[tile_id], improvement)
+                    else:
+                        effective_tiles[tile_id] = improvement
         
-        Parameters
-        ----------
-        hand_tiles : list
-            手牌のリスト（136形式）
-        dora_tiles : list
-            ドラ表示牌のリスト（136形式）
-        all_discards : list
-            全員の捨て牌リスト（136形式）
-        melds : list, optional
-            副露のリスト
-            
+        return effective_tiles
+    
+    def suggest_discard(self):
+        """
+        最適な捨て牌を提案する
+        
         Returns
         -------
-        tuple
-            (最適な捨て牌, 評価値)
+        dict
+            提案結果を含む辞書
+            - 'discard': 推奨する捨て牌
+            - 'reason': 理由
+            - 'shanten': 捨てた後のシャンテン数
+            - 'effective_tiles': 有効牌のリスト
         """
-        if not hand_tiles:
-            logger.warning("手牌が空です")
-            return None, 0
+        # 手牌が空の場合
+        if not self.hand:
+            return {
+                'discard': None,
+                'reason': '手牌がありません',
+                'shanten': -1,
+                'effective_tiles': {}
+            }
         
-        # メルドがない場合は空リストを使用
-        if melds is None:
-            melds = []
-            
-        try:
-            # 各牌について捨てた場合の評価値を計算
-            evaluations = []
-            
-            for tile in hand_tiles:
-                # この牌を捨てた場合の手牌
-                new_hand = hand_tiles.copy()
-                new_hand.remove(tile)
-                
-                # 136形式から34形式に変換
-                hand34 = self._to_34_array(new_hand)
-                
-                # シャンテン数計算
-                shanten = self.shanten_calculator.calculate_shanten(hand34, melds)
-                
-                # 有効牌の数
-                effective_tiles = []
-                for tile_id in range(self.num_tiles):
-                    # この牌がすでに4枚使われていたらスキップ
-                    if hand34[tile_id] >= 4:
-                        continue
-                    
-                    # この牌を追加した場合の手牌
-                    test_hand = hand34.copy()
-                    test_hand[tile_id] += 1
-                    
-                    # 追加後のシャンテン数を計算
-                    test_shanten = self.shanten_calculator.calculate_shanten(test_hand, melds)
-                    
-                    # シャンテン数が下がる牌を有効牌とする
-                    if test_shanten < shanten:
-                        effective_tiles.append(tile_id)
-                
-                # 有効牌の残り枚数を計算
-                remaining_count = sum(self._estimate_remaining_tiles(all_discards)[tile_id] for tile_id in effective_tiles)
-                
-                # 危険度（他家の捨て牌から推測）
-                danger_level = self.calculate_danger(tile, all_discards, [False, False, False, False])
-                
-                # 得点期待値
-                score_exp = self._calculate_expected_score(hand34, dora_tiles)
-                
-                # 総合評価（要調整）
-                value = self._evaluate_discard(shanten, len(effective_tiles), remaining_count, danger_level, score_exp)
-                
-                # 結果を保存
-                evaluations.append((tile, value))
-            
-            # 最も評価値の高い牌を選択
-            best_tile, best_value = max(evaluations, key=lambda x: x[1])
-            
-            logger.debug(f"最適な捨て牌: {best_tile//4}{['萬', '筒', '索', '字'][best_tile//36]}, 評価値: {best_value:.2f}")
-            return best_tile, best_value
+        # 残り牌数の更新
+        self.update_remaining_tiles()
         
-        except Exception as e:
-            logger.error(f"最適捨て牌計算中にエラー: {e}")
-            # エラー時は手牌の先頭の牌を返す
-            if hand_tiles:
-                return hand_tiles[0], 0
-            return None, 0
-    
-    def calculate_danger(self, tile, all_discards, reach_status):
-        """
-        牌の危険度を計算
+        # 各牌を捨てた場合のシャンテン数とその後の有効牌を計算
+        discard_options = {}
         
-        Parameters
-        ----------
-        tile : int
-            評価する牌（136形式）
-        all_discards : list
-            全員の捨て牌リスト（136形式）
-        reach_status : list
-            各プレイヤーのリーチ状態
+        for i, tile in enumerate(self.hand):
+            # この牌を捨てた場合の手牌
+            test_hand = self.hand.copy()
+            test_hand.pop(i)
             
-        Returns
-        -------
-        float
-            危険度 (0-1の範囲、1が最も危険)
-        """
-        # 136形式から34形式に変換
-        tile34 = tile // 4
-        
-        # 基本危険度
-        danger = 0.0
-        
-        # リーチがかかっている場合は危険度を上げる
-        if any(reach_status):
-            # リーチしているプレイヤーの数
-            reach_count = sum(reach_status)
+            # シャンテン数の計算
+            shanten = self.calculate_shanten(test_hand)
             
-            # リーチ者の河から危険度を算出
-            for i, is_reach in enumerate(reach_status):
-                if is_reach:
-                    # このプレイヤーの捨て牌を抽出
-                    player_discards = [t // 4 for t in all_discards]
-                    
-                    # 同種の牌が捨てられていれば安全度が上がる
-                    same_type_discarded = player_discards.count(tile34)
-                    danger = max(danger, 1.0 - (same_type_discarded / 4.0))
-                    
-                    # 筋の牌も考慮
-                    if tile34 < 27:  # 数牌の場合
-                        suit = tile34 // 9  # 0:萬子, 1:筒子, 2:索子
-                        number = tile34 % 9  # 0-8
-                        
-                        # 筋の牌の牌種を計算
-                        suji_tiles = []
-                        if number <= 5:  # 1-6
-                            suji_tiles.append(suit * 9 + number + 3)  # 例: 1->4, 2->5, ...
-                        if number >= 3:  # 4-9
-                            suji_tiles.append(suit * 9 + number - 3)  # 例: 4->1, 5->2, ...
-                        
-                        # 筋の牌が捨てられていれば安全度が上がる
-                        for suji in suji_tiles:
-                            if suji in player_discards:
-                                danger -= 0.1
+            # 一時的に手牌を変更してシミュレーション
+            original_hand = self.hand
+            self.hand = test_hand
             
-            # 複数人がリーチしている場合、危険度は高くなる
-            danger *= (1.0 + 0.2 * (reach_count - 1))
-        
-        # 全体的な枯れ具合も考慮
-        discarded_count = all_discards.count(tile) // 4
-        danger -= 0.2 * discarded_count
-        
-        # 数牌の場合、位置による危険度調整
-        if tile34 < 27:
-            number = tile34 % 9  # 0-8
+            # 有効牌の計算
+            effective_tiles = self.get_effective_tiles()
             
-            # 1,9は比較的安全、2,8は中程度、3-7は危険
-            if number == 0 or number == 8:  # 1,9
-                danger -= 0.2
-            elif number == 1 or number == 7:  # 2,8
-                danger -= 0.1
+            # 有効牌の合計枚数
+            total_effective = sum(
+                min(count, self.remaining_tiles.get(tile_id, 0))
+                for tile_id, count in effective_tiles.items()
+            )
+            
+            # 手牌を元に戻す
+            self.hand = original_hand
+            
+            # オプションとして記録
+            discard_options[tile] = {
+                'shanten': shanten,
+                'effective_tiles': effective_tiles,
+                'total_effective': total_effective
+            }
         
-        # 字牌は比較的安全
+        # 最もシャンテン数が低く、有効牌が多い選択肢を選ぶ
+        best_discard = None
+        best_shanten = float('inf')
+        best_effective = -1
+        
+        for tile, option in discard_options.items():
+            # シャンテン数が低い方を優先
+            if option['shanten'] < best_shanten:
+                best_discard = tile
+                best_shanten = option['shanten']
+                best_effective = option['total_effective']
+            # シャンテン数が同じなら有効牌が多い方を優先
+            elif option['shanten'] == best_shanten and option['total_effective'] > best_effective:
+                best_discard = tile
+                best_effective = option['total_effective']
+        
+        # 結果の作成
+        if best_discard is not None:
+            option = discard_options[best_discard]
+            
+            # 理由の作成
+            if option['shanten'] == 0:
+                reason = "テンパイに必要"
+            else:
+                reason = f"{option['shanten']}向聴、有効牌{option['total_effective']}枚"
+            
+            return {
+                'discard': best_discard,
+                'reason': reason,
+                'shanten': option['shanten'],
+                'effective_tiles': option['effective_tiles']
+            }
         else:
-            danger -= 0.15
-        
-        # 0-1の範囲に正規化
-        danger = max(0.0, min(1.0, danger))
-        
-        return danger
+            return {
+                'discard': self.hand[0] if self.hand else None,
+                'reason': '最適な捨て牌が見つかりません',
+                'shanten': -1,
+                'effective_tiles': {}
+            }
     
-    def predict_opponent_waits(self, discards, melds, is_riichi):
+    def get_dangerous_tiles(self, opponent_discards=None):
         """
-        相手の待ち牌を予測
+        危険牌（他家の待ちの可能性が高い牌）を判定する
         
         Parameters
         ----------
-        discards : list
-            対象プレイヤーの捨て牌リスト（136形式）
-        melds : list
-            対象プレイヤーの副露リスト
-        is_riichi : bool
-            対象プレイヤーがリーチしているかどうか
+        opponent_discards : list, optional
+            相手の捨て牌リスト
             
         Returns
         -------
         dict
-            待ち牌とその確率の辞書 {牌ID: 確率}
+            牌ID: 危険度のマッピング（0-100）
         """
-        if not is_riichi:
-            # リーチしていない場合は予測精度が低いので空の辞書を返す
-            return {}
+        # 相手の捨て牌から推測
+        danger_tiles = {}
         
-        # ダミー実装: よくある待ち牌パターンを返す
-        # 実際の実装では捨て牌履歴などから機械学習で推定
-        waits = {
-            8: 0.7,   # 3萬
-            20: 0.2,  # 6筒
-            64: 0.1   # 5索
+        # 相手の捨て牌情報がある場合
+        if opponent_discards:
+            # 数牌（萬子、筒子、索子）の分析
+            for suit in ['m', 'p', 's']:
+                # 各数字の捨牌枚数
+                discarded = {i: 0 for i in range(1, 10)}
+                
+                # 捨て牌を集計
+                for tile in opponent_discards:
+                    if tile.startswith(suit) and len(tile) == 2:
+                        num = int(tile[1])
+                        if 1 <= num <= 9:
+                            discarded[num] += 1
+                
+                # 未登場の数字は危険の可能性
+                for i in range(1, 10):
+                    if discarded[i] == 0:
+                        # 特に両面待ちになりやすい牌は危険
+                        if 2 <= i <= 8:
+                            # 周囲の牌も捨てられていない場合、さらに危険
+                            if i > 2 and discarded[i-2] == 0:
+                                danger_tiles[f'{suit}{i}'] = 80
+                            elif i < 8 and discarded[i+2] == 0:
+                                danger_tiles[f'{suit}{i}'] = 80
+                            else:
+                                danger_tiles[f'{suit}{i}'] = 60
+                        else:
+                            danger_tiles[f'{suit}{i}'] = 40
+            
+            # 字牌の分析
+            for tile_id in ['zeast', 'zsouth', 'zwest', 'znorth', 'zwhite', 'zgreen', 'zred']:
+                if tile_id not in opponent_discards:
+                    danger_tiles[tile_id] = 50
+        
+        # リーチがかかっている場合、全ての残り牌を危険とする
+        # （この実装は簡略化のため、実際にはもっと複雑な判定が必要）
+        
+        # 危険度の調整（手牌に含まれる牌は安全）
+        for tile in self.hand:
+            if tile in danger_tiles:
+                danger_tiles[tile] = 0
+        
+        return danger_tiles
+    
+    def should_call_mahjong(self, winning_tile):
+        """
+        和了するべきかを判定する（役判定）
+        
+        Parameters
+        ----------
+        winning_tile : str
+            和了牌のID
+            
+        Returns
+        -------
+        dict
+            和了判定の結果
+            - 'should_call': 和了するべきか（True/False）
+            - 'yaku': 成立している役のリスト
+            - 'score': 点数
+        """
+        # 簡易的な役判定（実際の麻雀では複雑な判定が必要）
+        yaku = []
+        score = 0
+        
+        # 手牌＋和了牌
+        complete_hand = self.hand + [winning_tile]
+        
+        # 七対子の判定
+        if len(complete_hand) == 14:
+            tile_counts = Counter(complete_hand)
+            if all(count == 2 for count in tile_counts.values()):
+                yaku.append('七対子')
+                score = 25
+        
+        # 他の役判定（簡略化）
+        # 通常は役満、三色同順、一気通貫など様々な役を判定する
+        
+        # 結果の判定
+        should_call = len(yaku) > 0
+        
+        return {
+            'should_call': should_call,
+            'yaku': yaku,
+            'score': score
         }
-        
-        return waits
     
-    def _to_34_array(self, tiles):
+    def should_call_riichi(self):
         """
-        136形式の牌リストを34形式の配列に変換
+        リーチするべきかを判定する
+        
+        Returns
+        -------
+        dict
+            リーチ判定の結果
+            - 'should_call': リーチするべきか（True/False）
+            - 'discard': リーチ宣言牌
+            - 'reason': 理由
+        """
+        # 手牌のシャンテン数を確認
+        shanten = self.calculate_shanten()
+        
+        # テンパイしていない場合はリーチできない
+        if shanten > 0:
+            return {
+                'should_call': False,
+                'discard': None,
+                'reason': f'テンパイしていません（{shanten}向聴）'
+            }
+        
+        # テンパイしている場合、最適な捨て牌を選ぶ
+        suggestion = self.suggest_discard()
+        
+        # ベンチマーク: 有効牌の残り枚数
+        effective_count = sum(
+            min(count, self.remaining_tiles.get(tile_id, 0))
+            for tile_id, count in suggestion['effective_tiles'].items()
+        )
+        
+        # 有効牌が少なすぎる場合はリーチしない
+        if effective_count < 4:
+            return {
+                'should_call': False,
+                'discard': suggestion['discard'],
+                'reason': f'有効牌が少なすぎます（{effective_count}枚）'
+            }
+        
+        # 残り牌数が少ない場合はリーチしない（ここでは簡易的な判定）
+        remaining_total = sum(self.remaining_tiles.values())
+        if remaining_total < 20:
+            return {
+                'should_call': False,
+                'discard': suggestion['discard'],
+                'reason': f'終盤なのでリーチは控えめに（残り{remaining_total}枚）'
+            }
+        
+        # その他の判定（点数状況や局面など）
+        
+        # リーチを推奨
+        return {
+            'should_call': True,
+            'discard': suggestion['discard'],
+            'reason': f'有効牌{effective_count}枚、リーチ推奨'
+        }
+    
+    def should_call_chi_pon_kan(self, tile, call_type):
+        """
+        チー/ポン/カンするべきかを判定する
         
         Parameters
         ----------
-        tiles : list
-            変換する牌リスト（136形式）
+        tile : str
+            鳴こうとしている牌のID
+        call_type : str
+            鳴きの種類（'chi', 'pon', 'kan'）
             
         Returns
         -------
-        list
-            34形式の配列（インデックスが牌種、値が枚数）
+        dict
+            鳴き判定の結果
+            - 'should_call': 鳴くべきか（True/False）
+            - 'reason': 理由
         """
-        result = [0] * 34
-        for tile in tiles:
-            result[tile // 4] += 1
-        return result
+        # チーの判定
+        if call_type == 'chi':
+            # 手牌からチーできるか確認
+            can_chi = False
+            chi_sets = []
+            
+            # 数牌の場合のみチー可能
+            if tile[0] in ['m', 'p', 's'] and len(tile) == 2:
+                tile_num = int(tile[1])
+                suit = tile[0]
+                
+                # 左チー（例: 3,4 + 5）
+                if tile_num >= 3:
+                    left_tiles = [f'{suit}{tile_num-2}', f'{suit}{tile_num-1}']
+                    if all(t in self.hand for t in left_tiles):
+                        can_chi = True
+                        chi_sets.append(left_tiles + [tile])
+                
+                # 中チー（例: 4 + 5 + 6）
+                if 2 <= tile_num <= 8:
+                    middle_tiles = [f'{suit}{tile_num-1}', f'{suit}{tile_num+1}']
+                    if all(t in self.hand for t in middle_tiles):
+                        can_chi = True
+                        chi_sets.append([middle_tiles[0], tile, middle_tiles[1]])
+                
+                # 右チー（例: 5 + 6,7）
+                if tile_num <= 7:
+                    right_tiles = [f'{suit}{tile_num+1}', f'{suit}{tile_num+2}']
+                    if all(t in self.hand for t in right_tiles):
+                        can_chi = True
+                        chi_sets.append([tile] + right_tiles)
+            
+            if not can_chi:
+                return {
+                    'should_call': False,
+                    'reason': 'チーできる牌がありません'
+                }
+            
+            # チーした場合のシャンテン数変化を確認
+            current_shanten = self.calculate_shanten()
+            best_improvement = 0
+            best_set = None
+            
+            for chi_set in chi_sets:
+                # チー後の手牌
+                new_hand = self.hand.copy()
+                for t in chi_set:
+                    if t != tile and t in new_hand:
+                        new_hand.remove(t)
+                
+                # シャンテン数の変化
+                new_shanten = self.calculate_shanten(new_hand)
+                improvement = current_shanten - new_shanten
+                
+                if improvement > best_improvement:
+                    best_improvement = improvement
+                    best_set = chi_set
+            
+            # シャンテン数が改善する場合はチーを推奨
+            if best_improvement > 0:
+                return {
+                    'should_call': True,
+                    'reason': f'シャンテン数が{best_improvement}減少します'
+                }
+            
+            # その他の判定（手牌の形や局面など）
+            
+            # 基本的にはチーを控える
+            return {
+                'should_call': False,
+                'reason': 'シャンテン数の改善がないため、チーは控えめに'
+            }
+        
+        # ポンの判定
+        elif call_type == 'pon':
+            # 手牌からポンできるか確認
+            tile_count = self.hand.count(tile)
+            
+            if tile_count < 2:
+                return {
+                    'should_call': False,
+                    'reason': 'ポンできる牌がありません'
+                }
+            
+            # ポン後の手牌
+            new_hand = self.hand.copy()
+            for _ in range(2):  # 手牌から2枚除去
+                new_hand.remove(tile)
+            
+            # シャンテン数の変化
+            current_shanten = self.calculate_shanten()
+            new_shanten = self.calculate_shanten(new_hand)
+            improvement = current_shanten - new_shanten
+            
+            # シャンテン数が改善する場合はポンを推奨
+            if improvement > 0:
+                return {
+                    'should_call': True,
+                    'reason': f'シャンテン数が{improvement}減少します'
+                }
+            
+            # 三元牌や場風はポンするメリットが高い
+            if tile in ['zwhite', 'zgreen', 'zred', 'zeast']:
+                return {
+                    'should_call': True,
+                    'reason': '役牌のポンは有利です'
+                }
+            
+            # 基本的にはポンを控える
+            return {
+                'should_call': False,
+                'reason': 'シャンテン数の改善がないため、ポンは控えめに'
+            }
+        
+        # カンの判定
+        elif call_type == 'kan':
+            # 手牌からカンできるか確認
+            tile_count = self.hand.count(tile)
+            
+            if tile_count < 3:
+                return {
+                    'should_call': False,
+                    'reason': 'カンできる牌がありません'
+                }
+            
+            # カン後の手牌（抜きカン）
+            new_hand = self.hand.copy()
+            for _ in range(3):  # 手牌から3枚除去
+                new_hand.remove(tile)
+            
+            # シャンテン数の変化
+            current_shanten = self.calculate_shanten()
+            new_shanten = self.calculate_shanten(new_hand)
+            improvement = current_shanten - new_shanten
+            
+            # シャンテン数が改善する場合はカンを推奨
+            if improvement > 0:
+                return {
+                    'should_call': True,
+                    'reason': f'シャンテン数が{improvement}減少します'
+                }
+            
+            # 基本的にはカンを控える（リンシャンツモやドラ増加というメリットもある）
+            return {
+                'should_call': True,
+                'reason': 'リンシャンツモとドラ増加が期待できます'
+            }
+        
+        else:
+            return {
+                'should_call': False,
+                'reason': f'不明な鳴き種類: {call_type}'
+            }
     
-    def _estimate_remaining_tiles(self, all_discards):
+    def get_tile_name(self, tile_id):
         """
-        全ての捨て牌から残り牌を推定
+        牌IDから表示名を取得する
         
         Parameters
         ----------
-        all_discards : list
-            全員の捨て牌リスト（136形式）
+        tile_id : str
+            牌ID
             
         Returns
         -------
-        list
-            各牌の残り枚数（34形式）
+        str
+            牌の表示名
         """
-        # 初期状態（各牌4枚ずつ）
-        remaining = [4] * 34
-        
-        # 捨て牌を引く
-        for tile in all_discards:
-            tile34 = tile // 4
-            remaining[tile34] = max(0, remaining[tile34] - 1)
-        
-        return remaining
+        return self.TILE_NAMES.get(tile_id, tile_id)
+
+
+# 簡単なテスト
+if __name__ == "__main__":
+    engine = MahjongEngine()
     
-    def _evaluate_discard(self, shanten, effective_tiles_count, remaining_count, danger, score_exp):
-        """
-        捨て牌の評価関数
-        
-        Parameters
-        ----------
-        shanten : int
-            シャンテン数
-        effective_tiles_count : int
-            有効牌の種類数
-        remaining_count : int
-            有効牌の残り枚数
-        danger : float
-            危険度（0-1）
-        score_exp : int
-            期待得点
-            
-        Returns
-        -------
-        float
-            評価値
-        """
-        # シャンテン数は低いほど良い、有効牌は多いほど良い、危険度は低いほど良い
-        # 各項目に重みを付けて評価
-        # 評価関数は調整が必要
-        
-        # シャンテン数の重み
-        shanten_weight = -1.5
-        
-        # 有効牌の種類数の重み
-        effective_tiles_weight = 0.3
-        
-        # 有効牌の残り枚数の重み
-        remaining_weight = 0.2
-        
-        # 危険度の重み
-        danger_weight = -0.7
-        
-        # 期待得点の重み（単位を合わせるため1/1000）
-        score_weight = 0.1 / 1000
-        
-        # 総合評価
-        value = (shanten_weight * shanten +
-                 effective_tiles_weight * effective_tiles_count +
-                 remaining_weight * remaining_count +
-                 danger_weight * danger +
-                 score_weight * score_exp)
-        
-        return value
+    # テスト用の手牌
+    test_hand = ['m1', 'm2', 'm3', 'p2', 'p3', 'p4', 's5', 's5', 's5', 'zeast', 'zeast', 'zwhite', 'zwhite']
+    engine.set_hand(test_hand)
     
-    def _calculate_expected_score(self, hand34, dora_tiles):
-        """
-        期待得点を計算
-        
-        Parameters
-        ----------
-        hand34 : list
-            手牌の配列（34形式）
-        dora_tiles : list
-            ドラ表示牌のリスト（136形式）
-            
-        Returns
-        -------
-        int
-            期待得点
-        """
-        # ダミー実装: 役の有無をチェックして得点を推定
-        # 実際の実装ではもっと精緻な計算が必要
-        
-        # 基本点
-        expected_score = 1000
-        
-        # 対子の数をカウント
-        pair_count = sum(1 for x in hand34 if x >= 2)
-        
-        # 刻子（暗刻）の数をカウント
-        triplet_count = sum(1 for x in hand34 if x >= 3)
-        
-        # 順子の可能性（単純化）
-        sequence_possibility = 0
-        for suit in range(3):  # 萬子、筒子、索子
-            for i in range(7):  # 1-7（これに続く8,9を考慮）
-                idx = suit * 9 + i
-                if hand34[idx] > 0 and hand34[idx + 1] > 0 and hand34[idx + 2] > 0:
-                    sequence_possibility += 1
-        
-        # 役牌の価値
-        yakuhai_value = 0
-        for i in range(27, 34):  # 東、南、西、北、白、發、中
-            if hand34[i] >= 3:
-                yakuhai_value += 1000
-        
-        # ドラの数
-        dora_count = 0
-        for tile in dora_tiles:
-            dora_id = (tile // 4 + 1) % 9 + (tile // 36) * 9  # 次の牌がドラ
-            dora_count += hand34[dora_id]
-        
-        # 点数の調整
-        expected_score += pair_count * 100
-        expected_score += triplet_count * 400
-        expected_score += sequence_possibility * 300
-        expected_score += yakuhai_value
-        expected_score += dora_count * 1000
-        
-        return expected_score
+    # シャンテン数
+    shanten = engine.calculate_shanten()
+    print(f"シャンテン数: {shanten}")
     
-    def is_tenpai(self, hand_tiles, melds=None):
-        """
-        テンパイかどうかを判定
-        
-        Parameters
-        ----------
-        hand_tiles : list
-            手牌のリスト（136形式）
-        melds : list, optional
-            副露のリスト
-            
-        Returns
-        -------
-        bool
-            テンパイならTrue
-        """
-        # シャンテン数が0ならテンパイ
-        return self.calculate_shanten(hand_tiles, melds) == 0
+    # 捨て牌提案
+    suggestion = engine.suggest_discard()
+    print(f"提案する捨て牌: {engine.get_tile_name(suggestion['discard'])}")
+    print(f"理由: {suggestion['reason']}")
+    
+    # 有効牌
+    effective_tiles = suggestion['effective_tiles']
+    if effective_tiles:
+        print("有効牌:")
+        for tile, improvement in effective_tiles.items():
+            print(f"  {engine.get_tile_name(tile)}: {improvement}シャンテン改善")
