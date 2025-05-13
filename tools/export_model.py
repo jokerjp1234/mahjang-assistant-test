@@ -8,7 +8,7 @@
 アプリケーションで使用するためにエクスポートします。
 
 使用方法:
-    python export_model.py --model_path=models/tile_recognition_model/best_model.h5 --output_dir=models/tile_recognition_model
+    python export_model.py --model_path=models/tile_recognition_model/best_model.keras --output_dir=models/tile_recognition_model
 
 オプション:
     --model_path: トレーニング済みモデルのパス
@@ -209,12 +209,22 @@ def main():
     print("\nSavedModel形式でエクスポートしています...")
     saved_model_dir = output_dir / 'saved_model'
     try:
-        model.save(saved_model_dir)
+        # 最新のTensorFlowではsave_modelを使用
+        tf.keras.models.save_model(model, saved_model_dir)
         print(f"SavedModelを保存しました: {saved_model_dir}")
     except Exception as e:
         print(f"SavedModel形式でのエクスポート中にエラーが発生しました: {e}")
     
-    # 2. TensorFlow Lite形式
+    # 2. Keras形式
+    print("\nKeras形式でエクスポートしています...")
+    keras_path = output_dir / 'model.keras'
+    try:
+        model.save(keras_path)
+        print(f"Kerasモデルを保存しました: {keras_path}")
+    except Exception as e:
+        print(f"Keras形式でのエクスポート中にエラーが発生しました: {e}")
+    
+    # 3. TensorFlow Lite形式
     print("\nTensorFlow Lite形式でエクスポートしています...")
     export_to_tflite(model, output_dir)
     
