@@ -8,10 +8,10 @@
 アプリケーションで使用するためにエクスポートします。
 
 使用方法:
-    python export_model.py --model_path=models/tile_recognition_model/best_model.keras --output_dir=models/tile_recognition_model
+    python export_model.py --model_path=models/tile_recognition_model/best_model.h5 --output_dir=models/tile_recognition_model
 
 オプション:
-    --model_path: トレーニング済みモデルのパス
+    --model_path: トレーニング済みモデルのパス (.h5または.keras)
     --output_dir: エクスポートしたモデルの出力先ディレクトリ
     --image_size: 画像サイズ（例: 64x64）
 """
@@ -31,11 +31,17 @@ def parse_arguments():
     """コマンドライン引数を解析する"""
     parser = argparse.ArgumentParser(description='麻雀牌認識モデルエクスポートツール')
     parser.add_argument('--model_path', type=str, required=True,
-                        help='トレーニング済みモデルのパス')
+                        help='トレーニング済みモデルのパス (.h5または.keras)')
     parser.add_argument('--output_dir', type=str, default='models/exported_model',
                         help='エクスポートしたモデルの出力先ディレクトリ')
     parser.add_argument('--image_size', type=str, default='64x64',
                         help='画像サイズ（例: 64x64）')
+    
+    # 引数をパースし、ヘルプが必要かチェック
+    if len(sys.argv) == 1:
+        parser.print_help()
+        sys.exit(0)
+    
     return parser.parse_args()
 
 
@@ -81,6 +87,47 @@ def create_metadata_file(output_dir, class_mapping, image_size):
         print(f"メタデータファイルを保存しました: {output_dir / 'model_metadata.json'}")
     except Exception as e:
         print(f"メタデータファイルの作成中にエラーが発生しました: {e}")
+
+
+def export_models_safely(model, output_dir):
+    """さまざまな形式でモデルを安全にエクスポートする"""
+    output_dir = Path(output_dir)
+    
+    # 1. Keras形式 (.keras)
+    try:
+        keras_path = output_dir / 'model.keras'
+        model.save(keras_path)
+        print(f"Kerasモデルを保存しました: {keras_path}")
+    except Exception as e:
+        print(f"Keras形式での保存に失敗しました: {e}")
+        try:
+            # 代替：.h5形式
+            h5_path = output_dir / 'model.h5'
+            model.save(h5_path)
+            print(f"H5モデルを保存しました: {h5_path}")
+        except Exception as e2:
+            print(f"H5形式での保存にも失敗しました: {e2}")
+    
+    # 2. SavedModel形式
+    try:
+        saved_model_dir = output_dir / 'saved_model'
+        tf.saved_model.save(model, str(saved_model_dir))
+        print(f"SavedModelを保存しました: {saved_model_dir}")
+    except Exception as e:
+        print(f"SavedModel形式での保存に失敗しました: {e}")
+        try:
+            # 代替：exportメソッド（TF 2.13以降）
+            export_dir = output_dir / 'exported_model'
+            if hasattr(model, 'export'):
+                model.export(export_dir)
+                print(f"Exportされたモデルを保存しました: {export_dir}")
+            else:
+                print("モデルにexportメソッドがありません。TensorFlow 2.13以降が必要です。")
+        except Exception as e2:
+            print(f"Export形式での保存にも失敗しました: {e2}")
+    
+    # 3. TensorFlow Lite形式
+    export_to_tflite(model, output_dir)
 
 
 def export_to_tflite(model, output_dir, optimize=True):
@@ -186,14 +233,35 @@ def main():
     # モデルの読み込み
     print(f"モデルを読み込んでいます: {model_path}")
     try:
-        model = load_model(model_path)
+        # モデルの読み込み時に警告抑制
+        with tf.keras.utils.custom_object_scope({}):
+            model = load_model(model_path, compile=False)
         print("モデルの読み込みに成功しました。")
     except Exception as e:
         print(f"モデルの読み込み中にエラーが発生しました: {e}")
-        sys.exit(1)
+        print("代替方法を試行中...")
+        
+        try:
+            # 代替方法1: compile=Trueで試す
+            model = load_model(model_path, compile=True)
+            print("モデルの読み込みに成功しました（compile=True）。")
+        except Exception as e2:
+            print(f"代替方法1も失敗しました: {e2}")
+            
+            try:
+                # 代替方法2: TF 2.x互換性のためにtf.keras.modelsから直接読み込む
+                model = tf.keras.models.load_model(model_path)
+                print("モデルの読み込みに成功しました（tf.keras.models）。")
+            except Exception as e3:
+                print(f"代替方法2も失敗しました: {e3}")
+                print("モデルの読み込みに失敗しました。プロセスを終了します。")
+                sys.exit(1)
     
     # モデルの概要表示
-    model.summary()
+    try:
+        model.summary()
+    except Exception as e:
+        print(f"モデル概要の表示に失敗しました: {e}")
     
     # クラスマッピングの読み込み
     class_mapping = load_class_mapping(model_dir)
@@ -205,28 +273,8 @@ def main():
         print(f"クラスマッピングファイルをコピーしました: {output_dir / 'class_mapping.txt'}")
     
     # モデルのエクスポート
-    # 1. SavedModel形式
-    print("\nSavedModel形式でエクスポートしています...")
-    saved_model_dir = output_dir / 'saved_model'
-    try:
-        # 最新のTensorFlowではsave_modelを使用
-        tf.keras.models.save_model(model, saved_model_dir)
-        print(f"SavedModelを保存しました: {saved_model_dir}")
-    except Exception as e:
-        print(f"SavedModel形式でのエクスポート中にエラーが発生しました: {e}")
-    
-    # 2. Keras形式
-    print("\nKeras形式でエクスポートしています...")
-    keras_path = output_dir / 'model.keras'
-    try:
-        model.save(keras_path)
-        print(f"Kerasモデルを保存しました: {keras_path}")
-    except Exception as e:
-        print(f"Keras形式でのエクスポート中にエラーが発生しました: {e}")
-    
-    # 3. TensorFlow Lite形式
-    print("\nTensorFlow Lite形式でエクスポートしています...")
-    export_to_tflite(model, output_dir)
+    print("\nモデルをエクスポートしています...")
+    export_models_safely(model, output_dir)
     
     # メタデータファイルの作成
     create_metadata_file(output_dir, class_mapping, args.image_size)
@@ -235,6 +283,7 @@ def main():
     save_example_code(output_dir, class_mapping, args.image_size)
     
     print("\nモデルのエクスポートが完了しました！")
+    print(f"エクスポートされたモデルは {output_dir} ディレクトリに保存されています。")
 
 
 if __name__ == "__main__":
